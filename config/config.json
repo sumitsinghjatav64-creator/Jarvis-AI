@@ -1,0 +1,10 @@
+{
+  "permission_grants": [
+    "audio_input",
+    "coding_workbench",
+    "file_controller",
+    "file_processor",
+    "local_file_access",
+    "workspace_write"
+  ]
+}

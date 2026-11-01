@@ -1,0 +1,84 @@
+--- a/web_bridge.py
++++ b/web_bridge.py
+@@ -476,38 +476,47 @@
+             def _invoke_registered():
+                 try:
+-                    sig = inspect.signature(cb)
+-                    params = list(sig.parameters.values())
+-                    has_varargs = any(
+-                        p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+-                        for p in params
+-                    )
+-                    num_params = len(params)
+-                    if has_varargs or num_params >= 3:
+-                        cb(wid, act, pld)
+-                    elif num_params == 2:
+-                        cb(wid, pld)
+-                    elif num_params == 1:
+-                        cb(pld)
++                    try:
++                        sig = inspect.signature(cb)
++                        params = list(sig.parameters.values())
++                        has_varargs = any(
++                            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
++                            for p in params
++                        )
++                        num_params = len(params)
++                    except (ValueError, TypeError):
++                        has_varargs = False
++                        num_params = None
++
++                    if num_params is not None:
++                        if has_varargs or num_params >= 3:
++                            cb(wid, act, pld)
++                        elif num_params == 2:
++                            cb(wid, pld)
++                        elif num_params == 1:
++                            cb(pld)
++                        else:
++                            cb()
+                     else:
+-                        cb()
+-                except (ValueError, TypeError):
+-                    try:
+-                        cb(wid, act, pld)
+-                    except TypeError:
+                         try:
+-                            cb(wid, pld)
++                            cb(wid, act, pld)
+                         except TypeError:
+                             try:
+-                                cb(pld)
++                                cb(wid, pld)
+                             except TypeError:
+-                                cb()
++                                try:
++                                    cb(pld)
++                                except TypeError:
++                                    cb()
+                 except Exception as exc:
+                     logger.error("Error executing widget action handler for %r: %s", act, exc, exc_info=True)
+ 
+-            if run_on_qt:
+-                self._run_on_qt_thread(_invoke_registered)
+-            else:
+-                _invoke_registered()
++            try:
++                if run_on_qt:
++                    self._run_on_qt_thread(_invoke_registered)
++                else:
++                    _invoke_registered()
++            except Exception as exc:
++                logger.error("Error dispatching widget action for %r: %s", act, exc, exc_info=True)
+ 
+         # b) To self.on_widget_action(widget_id, action_id, payload) if set
+@@ -816,5 +825,8 @@
+                         if not widget_id or not action_id:
+                             logger.warning("Dropped invalid widget_action: %s", msg)
+                             continue
+-                        self._dispatch_widget_action(widget_id, action_id, payload)
++                        try:
++                            self._dispatch_widget_action(widget_id, action_id, payload)
++                        except Exception as exc:
++                            logger.error("Error dispatching widget action: %s", exc, exc_info=True)
+ 

@@ -101,6 +101,15 @@ class ActionRegistry:
         if rec is None or not rec.valid:
             return f"Action '{name}' is not available."
         try:
+            if not isinstance(parameters, dict):
+                if isinstance(parameters, str):
+                    try:
+                        import json as _json
+                        parameters = _json.loads(parameters)
+                    except Exception:
+                        parameters = {"input": parameters, "query": parameters}
+                else:
+                    parameters = {}
             return _call_handler(rec.handler, parameters, ctx or {}) or "Done."
         except Exception as e:
             self._logger(f"Action '{name}' crashed during run(): {e}")
@@ -118,7 +127,11 @@ def _call_handler(fn: Callable, parameters: dict, ctx: dict) -> str:
     for key in _CTX_KEYS:
         if has_var_kw or key in sig.parameters:
             kwargs[key] = ctx.get(key)
-    return fn(parameters=parameters, **kwargs)
+    if "parameters" in sig.parameters or has_var_kw:
+        return fn(parameters=parameters, **kwargs)
+    call_args = {k: v for k, v in parameters.items() if k in sig.parameters}
+    call_args.update(kwargs)
+    return fn(**call_args)
 
 
 def _validate(module, filename: str) -> ActionRecord:

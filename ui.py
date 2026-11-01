@@ -10,6 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import Any
 
 import psutil
 
@@ -24,16 +25,38 @@ else:
 # and it puts a URL carrying the viewer's IP address into a terminal people
 # paste into bug reports. Silenced here, before Qt initialises its logging.
 # An explicit setting from the user is left alone.
-os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false")
+os.environ.setdefault("QT_LOGGING_RULES", "qt.multimedia.*=false;qt.multimedia.ffmpeg.*=false")
+os.environ.setdefault("AV_LOG_FORCE_NOCOLOR", "1")
+import warnings
+warnings.filterwarnings("ignore", category=FutureWarning, message=".*pynvml.*")
+
+def _silence_ffmpeg() -> None:
+    """Silence FFmpeg C-level stderr warnings (e.g. Late SEI, corrupt packet) in QtMultimedia."""
+    try:
+        import ctypes
+        import PyQt6
+        from pathlib import Path
+        bin_dir = Path(PyQt6.__file__).resolve().parent / "Qt6" / "bin"
+        for dll in bin_dir.glob("avutil*.dll"):
+            try:
+                lib = ctypes.CDLL(str(dll))
+                lib.av_log_set_level.argtypes = [ctypes.c_int]
+                lib.av_log_set_level.restype = None
+                lib.av_log_set_level(-8)  # AV_LOG_QUIET (-8) suppresses all harmless decoder/demuxer warnings
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+_silence_ffmpeg()
 
 from PyQt6.QtCore import (
-    QEasingCurve, QLineF, QMimeData, QObject, QParallelAnimationGroup, QPointF,
-    QPoint, QPropertyAnimation, QRect, QRectF, QSize, QSizeF, Qt, QTimer,
+    QLineF, QPointF, QPoint, QRectF, QSizeF, Qt, QTimer,
     QUrl, pyqtSignal,
 )
 from PyQt6.QtGui import (
     QBrush, QColor, QConicalGradient, QDragEnterEvent, QDropEvent, QFont,
-    QFontDatabase, QKeySequence, QLinearGradient, QPainter, QPainterPath,
+    QKeySequence, QPainter, QPainterPath,
     QPen, QPixmap, QRadialGradient, QShortcut,
 )
 # Video playback for the HUD. Part of PyQt6, so it costs no new dependency —
@@ -51,10 +74,11 @@ except Exception as _e:            # noqa: BLE001 - reported, never fatal
 
 from PyQt6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter,
+    QMainWindow, QPushButton, QScrollArea, QSizePolicy, QSplitter, QInputDialog,
     QGraphicsScene, QGraphicsView,
-    QStackedWidget, QTextEdit, QVBoxLayout, QWidget, QProgressBar,
+    QStackedWidget, QTextEdit, QVBoxLayout, QWidget,
 )
+from core.todo_store import todo_store
 
 try:
     from core.avatar import HoloAvatar
@@ -196,7 +220,7 @@ def retheme_all_widgets(old: dict[str, str], new: dict[str, str]) -> None:
     app = QApplication.instance()
     if app is None:
         return
-    for w in app.allWidgets():
+    for w in QApplication.allWidgets():
         try:
             ss = w.styleSheet()
             if ss:
@@ -242,16 +266,21 @@ def _nvml_gpu_windows() -> float:
                     continue
 
         if _nvml_lib is None:
-            import nvidia_smi as pynvml  # transition to nvidia-ml-py
+            import pynvml  
             pynvml.nvmlInit()
             h = pynvml.nvmlDeviceGetHandleByIndex(0)
             _nvml_ok = True
             return float(pynvml.nvmlDeviceGetUtilizationRates(h).gpu)
 
         dev = ctypes.c_void_p()
-        _nvml_lib.nvmlDeviceGetHandleByIndex_v2(0, ctypes.byref(dev))
-        util = _Util()
-        _nvml_lib.nvmlDeviceGetUtilizationRates(dev, ctypes.byref(util))
+        get_handle = getattr(_nvml_lib, "nvmlDeviceGetHandleByIndex_v2", None)
+        get_util = getattr(_nvml_lib, "nvmlDeviceGetUtilizationRates", None)
+        if get_handle and get_util:
+            get_handle(0, ctypes.byref(dev))
+            util = _Util()
+            get_util(dev, ctypes.byref(util))
+        else:
+            return 0.0
         _nvml_ok = True
         return float(util.gpu)
     except Exception:
@@ -332,7 +361,7 @@ class _SysMetrics:
         if self._pynvml_ok is not False:
             try:
                 if self._pynvml_h is None:
-                    import nvidia_smi as pynvml  # transition to nvidia-ml-py
+                    import pynvml  # type: ignore
                     pynvml.nvmlInit()
                     self._pynvml    = pynvml
                     self._pynvml_h  = pynvml.nvmlDeviceGetHandleByIndex(0)
@@ -372,7 +401,8 @@ class _SysMetrics:
     def _get_temp(self) -> float:
         # psutil — works on Linux; occasionally Windows with driver support
         try:
-            temps = psutil.sensors_temperatures()
+            get_temps = getattr(psutil, "sensors_temperatures", None)
+            temps = get_temps() if get_temps else {}
             for name in ["coretemp", "k10temp", "cpu_thermal", "acpitz",
                          "cpu-thermal", "zenpower", "it8688"]:
                 if name in temps and temps[name]:
@@ -567,6 +597,8 @@ class HudCanvas(QWidget):
 
     def _step(self):
         self._tick += 1
+        if not self._on_screen():
+            return
         now = time.time()
 
         # ── Live audio reactivity ────────────────────────────────────────────
@@ -783,10 +815,6 @@ class HudCanvas(QWidget):
             p.setPen(QPen(wave_color, max(1.5, r * (0.012 if layer in (1, 2) else 0.008))))
             p.drawPath(path)
 
-        for px, py, size, color in points:
-            p.setPen(QPen(color, size))
-            p.drawPoint(QPointF(px, py))
-
         # Soft luminous body behind the particle shell.
         p.setPen(Qt.PenStyle.NoPen)
         aura = QRadialGradient(cx, cy, shell_r * 1.20)
@@ -883,7 +911,8 @@ class HudCanvas(QWidget):
                 env     = (1.0 - abs(i - mid) / mid) ** 0.7      # center-weighted hump
                 shimmer = 0.55 + 0.45 * math.sin(self._tick * 0.18 + i * 0.7)
                 idle    = 3.0 + 2.0 * math.sin(self._tick * 0.09 + i * 0.6)
-                hgt     = int(max(2, min(24, idle + amp * 22.0 * env * shimmer)))
+                hgt     = int(idle + amp * 22.0 * env * shimmer)
+                hgt     = max(2, min(24, hgt))
                 if amp > 0.05:
                     cl = qcol(C.PRI) if hgt > 12 else qcol(C.PRI_DIM)
                 else:
@@ -1221,7 +1250,7 @@ class _DropCanvas(QWidget):
                    "Images · Video · Audio · PDF · Docs · Code · Data")
 
     def _paint_drag_over(self, p, W, H):
-        cx, cy = W / 2, H / 2
+        cy = H / 2
         p.setFont(QFont("Courier New", 20))
         p.setPen(QPen(qcol(C.PRI), 1))
         p.drawText(QRectF(0, cy - 24, W, 32), Qt.AlignmentFlag.AlignCenter, "⬇")
@@ -1230,6 +1259,8 @@ class _DropCanvas(QWidget):
         p.drawText(QRectF(0, cy + 12, W, 16), Qt.AlignmentFlag.AlignCenter, "Release to load")
 
     def _paint_file(self, p, W, H):
+        if not self._z._current_file:
+            return
         path = Path(self._z._current_file)
         cat  = _file_category(path)
         icon, icon_col = _FILE_ICONS.get(cat, _FILE_ICONS["unknown"])
@@ -1566,27 +1597,29 @@ class HueWheel(QWidget):
 
 
 class CustomizeOverlay(QWidget):
-    """Floating overlay — change assistant name, user name, UI colour and voice."""
+    """Floating overlay — change assistant name, user name, UI colour, TTS engine and voice."""
 
-    saved = pyqtSignal(str, str, str, str)   # assistant_name, user_name, ui_color, voice
-    _OW, _OH = 400, 588
+    saved = pyqtSignal(str, str, str, str, str, str)   # assistant_name, user_name, ui_color, gemini_voice, tts_engine, tts_voice
+    _OW, _OH = 460, 680
 
     def __init__(self, assistant_name="JARVIS", user_name="",
-                 ui_color=DEFAULT_UI_COLOR, voice="", parent=None):
+                 ui_color=DEFAULT_UI_COLOR, voice="", tts_engine="edgetts",
+                 tts_voice="", parent=None):
         super().__init__(parent)
+        self.on_preview: Any = None
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
             CustomizeOverlay {{
-                background: rgba(0, 6, 10, 245);
+                background: rgba(0, 8, 14, 252);
                 border: 1px solid {C.BORDER_B};
                 border-radius: 6px;
             }}
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(24, 18, 24, 18)
-        lay.setSpacing(8)
+        lay.setContentsMargins(22, 14, 22, 14)
+        lay.setSpacing(6)
 
-        def _lbl(txt, fs=9, bold=False, color=C.PRI, align=Qt.AlignmentFlag.AlignCenter):
+        def _lbl(txt, fs=8, bold=False, color=C.PRI, align=Qt.AlignmentFlag.AlignCenter):
             w = QLabel(txt); w.setAlignment(align)
             w.setFont(QFont("Courier New", fs,
                             QFont.Weight.Bold if bold else QFont.Weight.Normal))
@@ -1597,7 +1630,7 @@ class CustomizeOverlay(QWidget):
                f"border: 1px solid {C.BORDER}; border-radius: 3px; padding: 4px 8px; }}"
                f"QLineEdit:focus {{ border: 1px solid {C.PRI}; }}")
 
-        lay.addWidget(_lbl("⚙  CUSTOMISE ASSISTANT", 12, True))
+        lay.addWidget(_lbl("⚙  CUSTOMISE ASSISTANT", 11, True))
         sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f"color: {C.BORDER}; margin: 2px 0;")
         lay.addWidget(sep)
@@ -1605,29 +1638,125 @@ class CustomizeOverlay(QWidget):
         lay.addWidget(_lbl("ASSISTANT NAME", 8, color=C.TEXT_DIM,
                             align=Qt.AlignmentFlag.AlignLeft))
         self._name_input = QLineEdit(assistant_name)
-        self._name_input.setFont(QFont("Courier New", 10))
-        self._name_input.setFixedHeight(32)
+        self._name_input.setFont(QFont("Courier New", 9))
+        self._name_input.setFixedHeight(28)
         self._name_input.setStyleSheet(_fs)
         lay.addWidget(self._name_input)
 
-        lay.addSpacing(4)
         lay.addWidget(_lbl("YOUR NAME  (leave blank for default sir / efendim)", 8,
                             color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
         self._user_input = QLineEdit(user_name)
         self._user_input.setPlaceholderText("e.g.  Tony   (leave blank for auto)")
-        self._user_input.setFont(QFont("Courier New", 10))
-        self._user_input.setFixedHeight(32)
+        self._user_input.setFont(QFont("Courier New", 9))
+        self._user_input.setFixedHeight(28)
         self._user_input.setStyleSheet(_fs)
         lay.addWidget(self._user_input)
 
-        # ── Assistant voice — Gemini prebuilt voices ─────────────────────────
-        # Names are language-neutral proper nouns, so the row reads the same in
-        # every locale. Selecting one and applying rebuilds the Live session.
-        from memory.config_manager import AVAILABLE_VOICES, DEFAULT_VOICE
-        lay.addSpacing(4)
-        lay.addWidget(_lbl("ASSISTANT VOICE", 8, color=C.TEXT_DIM,
+        # ── Speech Synthesis Engine ──────────────────────────────────────────
+        from memory.config_manager import (
+            AVAILABLE_VOICES, DEFAULT_VOICE,
+            EDGE_VOICES_CATALOG, resolve_tts_voice,
+        )
+
+        lay.addSpacing(2)
+        lay.addWidget(_lbl("SPEECH SYNTHESIS ENGINE", 8, color=C.TEXT_DIM,
                             align=Qt.AlignmentFlag.AlignLeft))
-        self._sel_voice   = (voice or DEFAULT_VOICE)
+
+        self._sel_engine = (tts_engine or "edgetts").strip().lower()
+        if self._sel_engine not in ("edgetts", "gemini"):
+            self._sel_engine = "edgetts"
+
+        eng_row = QHBoxLayout(); eng_row.setSpacing(6)
+        self._btn_eng_edge = QPushButton("⚡ EdgeTTS (Neural / Hindi / Multi)")
+        self._btn_eng_edge.setCheckable(True)
+        self._btn_eng_edge.setFixedHeight(26)
+        self._btn_eng_edge.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._btn_eng_edge.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_eng_edge.clicked.connect(lambda: self._set_engine("edgetts"))
+        eng_row.addWidget(self._btn_eng_edge)
+
+        self._btn_eng_gem = QPushButton("🤖 Gemini Live (Direct Server Audio)")
+        self._btn_eng_gem.setCheckable(True)
+        self._btn_eng_gem.setFixedHeight(26)
+        self._btn_eng_gem.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._btn_eng_gem.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_eng_gem.clicked.connect(lambda: self._set_engine("gemini"))
+        eng_row.addWidget(self._btn_eng_gem)
+        lay.addLayout(eng_row)
+
+        # ── EdgeTTS Voice Section ────────────────────────────────────────────
+        self._edge_widget = QWidget()
+        edge_lay = QVBoxLayout(self._edge_widget)
+        edge_lay.setContentsMargins(0, 2, 0, 2)
+        edge_lay.setSpacing(3)
+
+        edge_hdr = QHBoxLayout()
+        edge_hdr.addWidget(_lbl("ASSISTANT VOICE MODEL", 8, color=C.TEXT_DIM,
+                                align=Qt.AlignmentFlag.AlignLeft))
+        edge_hdr.addStretch()
+        self._test_btn = QPushButton("▶  TEST VOICE")
+        self._test_btn.setFixedSize(100, 20)
+        self._test_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
+        self._test_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._test_btn.setStyleSheet(f"""
+            QPushButton {{
+                background: {C.PRI_GHO}; color: {C.PRI};
+                border: 1px solid {C.PRI_DIM}; border-radius: 3px;
+            }}
+            QPushButton:hover {{ border-color: {C.PRI}; color: {C.WHITE}; }}
+            QPushButton:disabled {{ color: {C.TEXT_DIM}; border-color: {C.BORDER}; }}
+        """)
+        self._test_btn.clicked.connect(self._on_test_voice)
+        edge_hdr.addWidget(self._test_btn)
+        edge_lay.addLayout(edge_hdr)
+
+        self._edge_combo = QComboBox()
+        self._edge_combo.setFont(QFont("Courier New", 8))
+        self._edge_combo.setFixedHeight(28)
+        self._edge_combo.setStyleSheet(f"""
+            QComboBox {{
+                background: #000d12; color: {C.TEXT};
+                border: 1px solid {C.BORDER}; border-radius: 3px; padding: 2px 8px;
+            }}
+            QComboBox:focus {{ border: 1px solid {C.PRI}; }}
+            QComboBox::drop-down {{ border: none; }}
+            QComboBox QAbstractItemView {{
+                background: #00121a; color: {C.TEXT};
+                selection-background-color: {C.PRI_GHO};
+                selection-color: {C.PRI};
+                border: 1px solid {C.BORDER};
+            }}
+        """)
+
+        cur_voice_resolved = resolve_tts_voice(tts_voice or "swara")
+        select_idx = 0
+        for i, item in enumerate(EDGE_VOICES_CATALOG):
+            self._edge_combo.addItem(f"{item['tag']}  —  {item['name']} ({item['gender']})", item["id"])
+            if item["id"].lower() == cur_voice_resolved.lower() or item["key"] == (tts_voice or "").lower():
+                select_idx = i
+
+        self._edge_combo.setCurrentIndex(select_idx)
+        self._edge_combo.currentIndexChanged.connect(self._on_edge_combo_change)
+        edge_lay.addWidget(self._edge_combo)
+
+        self._desc_lbl = QLabel("")
+        self._desc_lbl.setFont(QFont("Courier New", 7))
+        self._desc_lbl.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        self._desc_lbl.setWordWrap(True)
+        edge_lay.addWidget(self._desc_lbl)
+        self._update_desc_label()
+
+        lay.addWidget(self._edge_widget)
+
+        # ── Gemini Live Voice Section ────────────────────────────────────────
+        self._gemini_widget = QWidget()
+        gemini_lay = QVBoxLayout(self._gemini_widget)
+        gemini_lay.setContentsMargins(0, 2, 0, 2)
+        gemini_lay.setSpacing(3)
+        gemini_lay.addWidget(_lbl("GEMINI LIVE PREBUILT VOICE", 8, color=C.TEXT_DIM,
+                                  align=Qt.AlignmentFlag.AlignLeft))
+
+        self._sel_voice = (voice or DEFAULT_VOICE)
         if self._sel_voice not in AVAILABLE_VOICES:
             self._sel_voice = DEFAULT_VOICE
         self._voice_btns: dict[str, QPushButton] = {}
@@ -1635,23 +1764,31 @@ class CustomizeOverlay(QWidget):
         for _v in AVAILABLE_VOICES:
             b = QPushButton(_v)
             b.setCheckable(True)
-            b.setFixedHeight(28)
-            b.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
+            b.setFixedHeight(26)
+            b.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             b.clicked.connect(lambda _=False, name=_v: self._on_voice_pick(name))
             self._voice_btns[_v] = b
             voice_row.addWidget(b)
-        lay.addLayout(voice_row)
+        gemini_lay.addLayout(voice_row)
+
+        gem_desc = QLabel("Real-time native audio streamed directly from Gemini Live server.")
+        gem_desc.setFont(QFont("Courier New", 7))
+        gem_desc.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        gemini_lay.addWidget(gem_desc)
+
+        lay.addWidget(self._gemini_widget)
+        self._refresh_engine_ui()
         self._refresh_voice_btns()
 
         # ── UI colour — colour wheel ─────────────────────────────────────────
-        lay.addSpacing(4)
+        lay.addSpacing(2)
         clr_hdr = QHBoxLayout()
         clr_hdr.addWidget(_lbl("UI COLOUR  —  drag the handle", 8,
                                color=C.TEXT_DIM, align=Qt.AlignmentFlag.AlignLeft))
         clr_hdr.addStretch()
         df_btn = QPushButton("DEFAULT")
-        df_btn.setFixedSize(64, 20)
+        df_btn.setFixedSize(60, 18)
         df_btn.setFont(QFont("Courier New", 7, QFont.Weight.Bold))
         df_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         df_btn.setStyleSheet(f"""
@@ -1678,18 +1815,18 @@ class CustomizeOverlay(QWidget):
 
         self._hex_input = QLineEdit(self._sel_color)
         self._hex_input.setPlaceholderText("#00d4ff   (custom hex colour)")
-        self._hex_input.setFont(QFont("Courier New", 10))
-        self._hex_input.setFixedHeight(28)
+        self._hex_input.setFont(QFont("Courier New", 9))
+        self._hex_input.setFixedHeight(26)
         self._hex_input.setStyleSheet(_fs)
         self._hex_input.textEdited.connect(self._on_hex_edited)
         lay.addWidget(self._hex_input)
 
-        lay.addSpacing(6)
+        lay.addSpacing(4)
         btn_row = QHBoxLayout(); btn_row.setSpacing(8)
 
         save_btn = QPushButton("▸  APPLY CHANGES")
-        save_btn.setFixedHeight(34)
-        save_btn.setFont(QFont("Courier New", 9, QFont.Weight.Bold))
+        save_btn.setFixedHeight(32)
+        save_btn.setFont(QFont("Courier New", 8, QFont.Weight.Bold))
         save_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         save_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1702,8 +1839,8 @@ class CustomizeOverlay(QWidget):
         btn_row.addWidget(save_btn)
 
         cancel_btn = QPushButton("CANCEL")
-        cancel_btn.setFixedHeight(34)
-        cancel_btn.setFont(QFont("Courier New", 9))
+        cancel_btn.setFixedHeight(32)
+        cancel_btn.setFont(QFont("Courier New", 8))
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         cancel_btn.setStyleSheet(f"""
             QPushButton {{
@@ -1716,7 +1853,62 @@ class CustomizeOverlay(QWidget):
         btn_row.addWidget(cancel_btn)
         lay.addLayout(btn_row)
 
-    # ── voice selection ──────────────────────────────────────────────────────
+    # ── engine & voice selection ─────────────────────────────────────────────
+    def _set_engine(self, engine: str):
+        self._sel_engine = engine.strip().lower()
+        self._refresh_engine_ui()
+
+    def _refresh_engine_ui(self):
+        is_edge = (self._sel_engine == "edgetts")
+        self._btn_eng_edge.setChecked(is_edge)
+        self._btn_eng_gem.setChecked(not is_edge)
+
+        active_style = f"background: {C.PRI_GHO}; color: {C.PRI}; border: 1px solid {C.PRI}; border-radius: 3px;"
+        dim_style    = f"background: transparent; color: {C.TEXT_MED}; border: 1px solid {C.BORDER}; border-radius: 3px;"
+
+        self._btn_eng_edge.setStyleSheet(f"QPushButton {{ {active_style if is_edge else dim_style} }}")
+        self._btn_eng_gem.setStyleSheet(f"QPushButton {{ {dim_style if is_edge else active_style} }}")
+
+        self._edge_widget.setVisible(is_edge)
+        self._gemini_widget.setVisible(not is_edge)
+
+    def _on_edge_combo_change(self, idx: int):
+        self._update_desc_label()
+
+    def _update_desc_label(self):
+        from memory.config_manager import EDGE_VOICES_CATALOG
+        idx = self._edge_combo.currentIndex()
+        if 0 <= idx < len(EDGE_VOICES_CATALOG):
+            entry = EDGE_VOICES_CATALOG[idx]
+            self._desc_lbl.setText(f"ℹ {entry['desc']}")
+        else:
+            self._desc_lbl.setText("")
+
+    def _on_test_voice(self):
+        from memory.config_manager import EDGE_VOICES_CATALOG
+        voice_id = self._edge_combo.currentData() or "hi-IN-SwaraNeural"
+        entry = next((e for e in EDGE_VOICES_CATALOG if e["id"] == voice_id), None)
+        sample = entry["sample"] if entry else "Hello Sir, all diagnostic systems are functioning normally."
+
+        self._test_btn.setEnabled(False)
+        self._test_btn.setText("🔊 PLAYING...")
+
+        def _play():
+            try:
+                from core.tts import EdgeTTSEngine
+                eng = EdgeTTSEngine(voice=voice_id)
+                eng.speak(sample)
+            except Exception as e:
+                print(f"[Voice Test] Error: {e}")
+            finally:
+                QTimer.singleShot(0, self._restore_test_btn)
+
+        threading.Thread(target=_play, daemon=True).start()
+
+    def _restore_test_btn(self):
+        self._test_btn.setEnabled(True)
+        self._test_btn.setText("▶  TEST VOICE")
+
     def _on_voice_pick(self, name: str):
         self._sel_voice = name
         self._refresh_voice_btns()
@@ -1779,7 +1971,8 @@ class CustomizeOverlay(QWidget):
     def _save(self):
         name = self._name_input.text().strip() or "JARVIS"
         user = self._user_input.text().strip()
-        self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice)
+        edge_voice = self._edge_combo.currentData() or "hi-IN-SwaraNeural"
+        self.saved.emit(name, user, self._sel_color or DEFAULT_UI_COLOR, self._sel_voice, self._sel_engine, edge_voice)
         self.hide()
 
 
@@ -2010,7 +2203,9 @@ class AudioDeviceOverlay(_HudOverlay):
     def __init__(self, parent=None):
         super().__init__(parent)
         from core.audio_devices import list_devices, DEFAULT_LABEL
-        from memory.config_manager import get_input_device, get_output_device
+        from memory.config_manager import (
+            get_input_device, get_output_device, get_mic_gain, save_mic_gain,
+        )
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"""
@@ -2074,8 +2269,34 @@ class AudioDeviceOverlay(_HudOverlay):
         lay.addSpacing(4)
         self._out_box = _row("SPEAKERS — what JARVIS talks through",
                              "output", get_output_device())
+        lay.addSpacing(4)
 
-        note = QLabel("Applying reconnects the session. Your conversation is kept.")
+        cap_gain = QLabel("MIC BOOST — distance & room sensitivity")
+        cap_gain.setFont(QFont("Courier New", 8))
+        cap_gain.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
+        lay.addWidget(cap_gain)
+
+        self._gain_box = QComboBox()
+        self._gain_box.setFont(QFont("Courier New", 9))
+        self._gain_box.setFixedHeight(30)
+        self._gain_box.setStyleSheet(_combo_css)
+        self._gain_box.addItem("1.0x — Normal (sitting close to screen)", 1.0)
+        self._gain_box.addItem("1.5x — Moderate boost (arm's length)", 1.5)
+        self._gain_box.addItem("2.0x — Room distance boost (Recommended)", 2.0)
+        self._gain_box.addItem("2.5x — Far-field boost (across the desk)", 2.5)
+        self._gain_box.addItem("3.0x — High boost (across the room)", 3.0)
+        self._gain_box.addItem("4.0x — Maximum boost (quiet / far microphone)", 4.0)
+
+        cur_gain = get_mic_gain()
+        best_idx = 2
+        for i in range(self._gain_box.count()):
+            if abs(float(self._gain_box.itemData(i)) - cur_gain) < 0.1:
+                best_idx = i
+                break
+        self._gain_box.setCurrentIndex(best_idx)
+        lay.addWidget(self._gain_box)
+
+        note = QLabel("Applying reconnects the session if devices change. Your conversation is kept.")
         note.setWordWrap(True)
         note.setFont(QFont("Courier New", 7))
         note.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent;")
@@ -2112,16 +2333,26 @@ class AudioDeviceOverlay(_HudOverlay):
         from memory.config_manager import (
             get_input_device, get_output_device,
             save_input_device, save_output_device,
+            get_mic_gain, save_mic_gain,
         )
-        new_in  = self._in_box.currentData()  or ""
-        new_out = self._out_box.currentData() or ""
-        changed = (new_in != get_input_device()) or (new_out != get_output_device())
+        new_in   = self._in_box.currentData()   or ""
+        new_out  = self._out_box.currentData()  or ""
+        new_gain = float(self._gain_box.currentData() or 2.0)
+
+        dev_changed = (new_in != get_input_device()) or (new_out != get_output_device())
+        gain_changed = abs(new_gain - get_mic_gain()) > 0.05
+
         save_input_device(new_in)
         save_output_device(new_out)
+        save_mic_gain(new_gain)
         self.hide()
-        # Only rebuild the session if something actually moved — a no-op Apply
-        # should not cost a reconnect.
-        if changed:
+
+        top = self.window()
+        gain_fn = getattr(top, "on_mic_gain_change", None)
+        if gain_changed and callable(gain_fn):
+            gain_fn(new_gain)
+
+        if dev_changed:
             self.picked.emit()
 
 
@@ -2604,12 +2835,12 @@ class PluginSettingsOverlay(QWidget):
             if n != ns:
                 continue
             t = self._types.get((n, key), "text")
-            if t == "choice":
-                out[key] = w.currentText()
-            elif t == "toggle":
-                out[key] = w.isChecked()
-            else:
-                out[key] = w.text().strip()
+            if t == "choice" and hasattr(w, "currentText"):
+                out[key] = getattr(w, "currentText")()
+            elif t == "toggle" and hasattr(w, "isChecked"):
+                out[key] = getattr(w, "isChecked")()
+            elif hasattr(w, "text"):
+                out[key] = getattr(w, "text")().strip()
         return out
 
     def _save_ns(self, ns: str):
@@ -2803,13 +3034,16 @@ class RemoteKeyOverlay(QWidget):
             from io import BytesIO
             qr = _qrmod.QRCode(
                 box_size=5, border=2,
-                error_correction=_qrmod.constants.ERROR_CORRECT_M,
+                error_correction=getattr(getattr(_qrmod, 'constants', None), 'ERROR_CORRECT_M', 0),
             )
             qr.add_data(url)
             qr.make(fit=True)
             img = qr.make_image(fill_color="black", back_color="white")
             buf = BytesIO()
-            img.save(buf, format="PNG")
+            try:
+                getattr(img, "save")(buf, format="PNG")
+            except Exception:
+                img.save(buf)
             px = QPixmap()
             px.loadFromData(buf.getvalue())
             self._qr_label.setPixmap(
@@ -2891,6 +3125,38 @@ class RemoteKeyOverlay(QWidget):
         self.closed.emit()
 
 
+class CodingWorkbenchOverlay(QWidget):
+    submit = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(700, 620)
+        self.setStyleSheet(f"background: {C.PANEL}; border: 1px solid {C.BORDER_B};")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(18, 16, 18, 16)
+        title = QLabel("BIXY / CODING WORKBENCH")
+        title.setStyleSheet(f"color: {C.PRI}; background: transparent; font-weight: bold;")
+        lay.addWidget(title)
+        self._project = QLineEdit(); self._project.setPlaceholderText("Project path, e.g. C:/jarvis/Mark-LV-main/Mark-LV-main")
+        self._file = QLineEdit(); self._file.setPlaceholderText("Relative file path, e.g. core/example.py")
+        self._test = QLineEdit("python -m unittest discover -s .")
+        self._content = QTextEdit(); self._content.setPlaceholderText("Complete proposed file content for staging")
+        for widget in (self._project, self._file, self._test, self._content):
+            widget.setStyleSheet(f"background: {C.PANEL2}; color: {C.TEXT}; border: 1px solid {C.BORDER}; padding: 6px;")
+            lay.addWidget(widget)
+        row = QHBoxLayout()
+        for label, action in (("STAGE", "stage"), ("DIFF", "diff"), ("CHECK", "check"), ("APPLY", "apply"), ("RESTORE", "restore")):
+            button = QPushButton(label); button.clicked.connect(lambda _=False, a=action: self._submit(a)); row.addWidget(button)
+        lay.addLayout(row)
+        self._output = QTextEdit(); self._output.setReadOnly(True); lay.addWidget(self._output)
+
+    def _submit(self, action: str):
+        self.submit.emit({"action": action, "project_path": self._project.text().strip(), "file_path": self._file.text().strip(), "content": self._content.toPlainText(), "test_command": self._test.text().strip()})
+
+    def set_output(self, text: str):
+        self._output.setPlainText(text)
+
+
 class MainWindow(QMainWindow):
     _log_sig        = pyqtSignal(str)
     _state_sig      = pyqtSignal(str)
@@ -2941,6 +3207,8 @@ class MainWindow(QMainWindow):
         self.on_interrupt      = None   # callable: () -> None — stop JARVIS mid-speech
         self.on_voice_change   = None   # callable: () -> None — rebuild session with new voice
         self.on_audio_device_change = None  # callable: () -> None — reopen audio streams
+        self.on_coding_workbench = None  # callable: (dict) -> str
+        self.on_mic_gain_change = None      # callable: (gain: float) -> None — adjust microphone boost
         self._confirm_overlay  = None   # live ConfirmBanner, if one is on screen
         self.get_plugins       = None   # callable: () -> list[dict], set by JarvisLive
         self.get_plugin_settings = None # callable: () -> list[dict] settings schemas, set by JarvisLive
@@ -2951,6 +3219,7 @@ class MainWindow(QMainWindow):
         self.wake_get_state    = None   # callable: () -> dict {enabled, awake, ready}
         self._muted            = False
         self._current_file: str | None = None
+        self.on_gesture: Any = None
         self._remote_overlay: RemoteKeyOverlay | None = None
         self._customize_overlay: CustomizeOverlay | None = None
 
@@ -3253,6 +3522,18 @@ class MainWindow(QMainWindow):
         sc_full.activated.connect(self._toggle_fullscreen)
         sc_intr = QShortcut(QKeySequence("Escape"), self)
         sc_intr.activated.connect(self._do_interrupt)
+        sc_web = QShortcut(QKeySequence("F9"), self)
+        sc_web.activated.connect(self._toggle_web_window)
+
+    def _toggle_web_window(self) -> None:
+        web = getattr(self, "_web_window", None)
+        if web:
+            if web.isVisible():
+                web.hide()
+            else:
+                web.show()
+                web.raise_()
+                web.activateWindow()
 
     def _show_camera_frame(self, img_bytes: bytes):
         """Slot — display camera preview overlay (main thread)."""
@@ -3312,8 +3593,9 @@ class MainWindow(QMainWindow):
             self._gesture_events.append((gesture, now))
 
         actions = {
-            "OPEN_PALM": ("Pause / resume assistant", self._toggle_mute),
-            "THUMBS_UP": ("Interrupt assistant", self._do_interrupt),
+            "OPEN_PALM": ("Pause / resume assistant", lambda: self.on_gesture("open_palm") if self.on_gesture else self._toggle_mute),
+            "THUMBS_UP": ("Interrupt assistant", lambda: self.on_gesture("thumbs_up") if self.on_gesture else self._do_interrupt),
+            "TWO_FINGERS": ("Toggle camera", lambda: self.on_gesture("two_fingers") if self.on_gesture else None),
         }
         title, action = actions[gesture]
         self.write_log(f"SYS: Hand gesture: {title}")
@@ -3332,6 +3614,8 @@ class MainWindow(QMainWindow):
         thumb = abs(hand[4].x - hand[2].x) > 0.12
         if index and middle and ring and pinky:
             return "OPEN_PALM"
+        if index and middle and not ring and not pinky:
+            return "TWO_FINGERS"
         if thumb and not index and not middle and not ring and not pinky:
             return "THUMBS_UP"
         return "NONE"
@@ -3472,7 +3756,7 @@ class MainWindow(QMainWindow):
 
         self._video_title.setText(f"▶  {(title or 'VIDEO')[:44].upper()}")
         self._video_split = bool(audio_source)
-        self._set_video_muted(bool(muted))
+        self._set_video_muted(muted)
 
         url = (QUrl.fromLocalFile(source) if Path(source).exists()
                else QUrl(source))
@@ -3521,7 +3805,6 @@ class MainWindow(QMainWindow):
 
     def _set_video_muted(self, muted: bool) -> None:
         """Silence whichever output is carrying the sound for this video."""
-        muted = bool(muted)
         if self._video_audio:
             # When the sound is a separate stream this player has none, but
             # muting it too costs nothing and keeps the two paths identical.
@@ -3598,11 +3881,17 @@ class MainWindow(QMainWindow):
         self.write_log(f"SYS: The video could not be played{(' — ' + err) if err else ''}.")
         self._on_video_close()
 
+    def write_log(self, text: str) -> None:
+        try:
+            self._log.append_log(text)
+        except Exception:
+            pass
+
     def stop_video(self) -> None:
         self._video_close_sig.emit()
 
     def video_is_playing(self) -> bool:
-        return bool(self._video_on)
+        return self._video_on
 
     # ------------------------------------------------------------------
     # Icon generation — arc-reactor style, rendered with Pillow
@@ -3691,7 +3980,8 @@ class MainWindow(QMainWindow):
             d.ellipse([cx-Rc, cy-Rc, cx+Rc, cy+Rc], fill=(*WHITE, 255))
 
             # ── downscale to target size ──────────────────────────────────
-            return img.resize((sz, sz), PIL.Image.LANCZOS)
+            filter_mode = getattr(getattr(PIL.Image, 'Resampling', None), 'LANCZOS', getattr(PIL.Image, 'LANCZOS', 1))
+            return img.resize((sz, sz), filter_mode)
 
         try:
             sizes  = [256, 128, 64, 48, 32, 16]
@@ -3792,7 +4082,8 @@ class MainWindow(QMainWindow):
                 buf = ctypes.c_wchar_p()
                 if ctypes.windll.shell32.SHGetKnownFolderPath(
                         ctypes.byref(fid), 0, None, ctypes.byref(buf)) == 0:
-                    p = Path(buf.value)
+                    val = buf.value or ""
+                    p = Path(val)
                     ctypes.windll.ole32.CoTaskMemFree(buf)
                     if p.is_dir():
                         return p
@@ -3925,8 +4216,9 @@ class MainWindow(QMainWindow):
                 if not png_path.exists() and ico_path.exists():
                     try:
                         import PIL.Image
+                        filter_mode = getattr(getattr(PIL.Image, 'Resampling', None), 'LANCZOS', getattr(PIL.Image, 'LANCZOS', 1))
                         PIL.Image.open(ico_path).resize(
-                            (256, 256), PIL.Image.LANCZOS
+                            (256, 256), filter_mode
                         ).save(png_path, format="PNG")
                     except Exception:
                         png_path = ico_path  # fallback to .ico
@@ -3954,6 +4246,18 @@ class MainWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
+
+    def closeEvent(self, a0):
+        try:
+            bridge = getattr(self, "_web_bridge", None)
+            if bridge and hasattr(bridge, "stop"):
+                bridge.stop()
+        except Exception:
+            pass
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+        super().closeEvent(a0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -4157,13 +4461,76 @@ class MainWindow(QMainWindow):
         total = max(480, self._center_split.height())
         self._center_split.setSizes([total, 0, 0])
 
-    def _toggle_today_task(self, button: QPushButton, text: str, checked: bool) -> None:
+    def _toggle_today_task(self, task_id: str, button: QPushButton, text: str, checked: bool) -> None:
+        if not todo_store.set_completed(task_id, checked):
+            self._refresh_today_tasks()
+            return
         button.setText(("[x] " if checked else "[ ] ") + text)
-        remaining = sum(not item.isChecked() for item in self._task_buttons)
+        remaining = sum(not task["completed"] for task in todo_store.list_tasks(limit=200))
         self._task_count.setText(f"{remaining} task{'s' if remaining != 1 else ''} remaining")
+
+    def _refresh_today_tasks(self) -> None:
+        if not hasattr(self, "_task_list_layout"):
+            return
+        while self._task_list_layout.count():
+            item = self._task_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        tasks = todo_store.list_tasks(limit=200)
+        remaining = sum(not task["completed"] for task in tasks)
+        self._task_count.setText(f"{remaining} task{'s' if remaining != 1 else ''} remaining")
+        self._task_buttons = []
+        if not tasks:
+            empty = QLabel("No tasks yet")
+            empty.setFont(QFont("Segoe UI", 8))
+            empty.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            self._task_list_layout.addWidget(empty)
+            return
+        for task_data in tasks[:6]:
+            task_id, text, checked = task_data["id"], task_data["text"], task_data["completed"]
+            task = QPushButton(("[x] " if checked else "[ ] ") + text)
+            task.setCheckable(True)
+            task.setChecked(checked)
+            task.setCursor(Qt.CursorShape.PointingHandCursor)
+            task.setFont(QFont("Segoe UI", 8))
+            task.setStyleSheet(f"""
+                QPushButton {{
+                    color: {C.TEXT_MED}; background: transparent; border: none;
+                    text-align: left; padding: 2px 0;
+                }}
+                QPushButton:checked {{ color: {C.TEXT_DIM}; text-decoration: line-through; }}
+                QPushButton:hover {{ color: {C.WHITE}; }}
+            """)
+            task.toggled.connect(
+                lambda is_checked, tid=task_id, b=task, label=text:
+                    self._toggle_today_task(tid, b, label, is_checked)
+            )
+            self._task_list_layout.addWidget(task)
+            self._task_buttons.append(task)
+        if len(tasks) > 6:
+            more = QLabel(f"+ {len(tasks) - 6} more")
+            more.setFont(QFont("Segoe UI", 7))
+            more.setStyleSheet(f"color: {C.TEXT_DIM}; background: transparent; border: none;")
+            self._task_list_layout.addWidget(more)
+
+    def _add_today_task(self) -> None:
+        text, accepted = QInputDialog.getText(self, "Add task", "Task description:")
+        if not accepted:
+            return
+        try:
+            todo_store.add_task(text)
+        except ValueError as exc:
+            if hasattr(self, "write_log"):
+                self.write_log(f"SYS: {exc}")
+            return
+        self._refresh_today_tasks()
 
     def _send_quick_command(self, command: str) -> None:
         """Route command-centre affordances through the real text pipeline."""
+        if command == "Open coding workbench":
+            self._open_coding_workbench()
+            return
         self._input.setText(command)
         self._send()
 
@@ -4209,36 +4576,19 @@ class MainWindow(QMainWindow):
             f"color: {C.TEXT_MED}; background: transparent; border: none;"
         )
         today_lay.addWidget(self._today_date)
-        self._task_count = QLabel("3 tasks remaining")
+        self._task_count = QLabel("0 tasks remaining")
         self._task_count.setFont(QFont("Segoe UI", 8))
         self._task_count.setStyleSheet(
             f"color: {C.PRI}; background: transparent; border: none;"
         )
         today_lay.addWidget(self._task_count)
+        self._task_list_widget = QWidget()
+        self._task_list_layout = QVBoxLayout(self._task_list_widget)
+        self._task_list_layout.setContentsMargins(0, 0, 0, 0)
+        self._task_list_layout.setSpacing(2)
+        today_lay.addWidget(self._task_list_widget)
         self._task_buttons = []
-        for text, checked in (
-            ("Review priorities",   True),
-            ("Prepare daily brief", False),
-            ("Organise workspace",  False),
-        ):
-            task = QPushButton(("[x] " if checked else "[ ] ") + text)
-            task.setCheckable(True)
-            task.setChecked(checked)
-            task.setCursor(Qt.CursorShape.PointingHandCursor)
-            task.setFont(QFont("Segoe UI", 8))
-            task.setStyleSheet(f"""
-                QPushButton {{
-                    color: {C.TEXT_MED}; background: transparent; border: none;
-                    text-align: left; padding: 2px 0;
-                }}
-                QPushButton:checked {{ color: {C.TEXT_DIM}; text-decoration: line-through; }}
-                QPushButton:hover {{ color: {C.WHITE}; }}
-            """)
-            task.toggled.connect(
-                lambda is_checked, b=task, t=text: self._toggle_today_task(b, t, is_checked)
-            )
-            today_lay.addWidget(task)
-            self._task_buttons.append(task)
+        self._refresh_today_tasks()
         add_task = QPushButton("+ Add task")
         add_task.setCursor(Qt.CursorShape.PointingHandCursor)
         add_task.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
@@ -4247,7 +4597,7 @@ class MainWindow(QMainWindow):
             f"text-align: left; padding-top: 2px; }}"
             f"QPushButton:hover {{ color: {C.WHITE}; }}"
         )
-        add_task.clicked.connect(lambda: self._send_quick_command("Create a task in my task list"))
+        add_task.clicked.connect(self._add_today_task)
         today_lay.addWidget(add_task)
         lay.addWidget(today)
 
@@ -4292,6 +4642,7 @@ class MainWindow(QMainWindow):
             ("Open App",   "Open an application"),
             ("Search Web", "Search the web"),
             ("Take Note",  "Take a note"),
+            ("Code Workbench", "Open coding workbench"),
         ):
             action = QPushButton(text)
             action.setFont(QFont("Segoe UI", 9))
@@ -4577,6 +4928,15 @@ class MainWindow(QMainWindow):
         self._wake_btn.setStyleSheet(self._BTN_DIM)
         self._wake_sleep_btn.hide()
 
+        # ── Voice Biometrics Controls ──────────────────────────────────────
+        self._voice_enroll_btn = _row(QPushButton())
+        self._voice_enroll_btn.clicked.connect(self._tap_enroll_voice)
+        self._voice_filter_btn = _row(QPushButton())
+        self._voice_filter_btn.clicked.connect(self._toggle_voice_filter)
+        self._single_turn_btn = _row(QPushButton())
+        self._single_turn_btn.clicked.connect(self._toggle_single_turn)
+        self._refresh_voice_btns()
+
         self._ptt_btn = _row(QPushButton())
         self._ptt_btn.clicked.connect(self._toggle_ptt)
         self._refresh_talk_btns()
@@ -4825,7 +5185,7 @@ class MainWindow(QMainWindow):
         self._content_panel.show()
         if first_show:
             total = self._center_split.height()
-            self._center_split.setSizes([max(total - 220, 120), 220])
+            self._center_split.setSizes([max(total - 220, 120), 220, 0])
 
     # ── document review ──────────────────────────────────────────────────────
     # Rendered as rich text into the content panel that already exists, rather
@@ -4862,7 +5222,7 @@ class MainWindow(QMainWindow):
         for f in (findings or []):
             key, mark = self._REVIEW_MARKS.get(f.get("severity"), ("PRI_DIM", "·"))
             colour = getattr(C, key)
-            parts.append(f'<div style="margin-bottom:11px;">')
+            parts.append('<div style="margin-bottom:11px;">')
             parts.append(
                 f'<span style="color:{colour}; font-weight:bold;">{mark}</span> '
                 f'<span style="color:{C.WHITE}; font-weight:bold;">'
@@ -5056,10 +5416,20 @@ class MainWindow(QMainWindow):
                 child.deleteLater()
 
     def _quiz_render(self):
-        q = self._quiz["questions"][self._quiz["i"]]
-        n, total = self._quiz["i"] + 1, len(self._quiz["questions"])
+        if not self._quiz:
+            return
+        questions = self._quiz.get("questions")
+        if not isinstance(questions, list):
+            return
+        idx = int(self._quiz.get("i", 0))
+        if idx < 0 or idx >= len(questions):
+            return
+        q = questions[idx]
+        if not isinstance(q, dict):
+            return
+        n, total = idx + 1, len(questions)
         self._quiz_count_lbl.setText(f"{n} / {total}")
-        self._quiz_q_lbl.setText(q.get("question", ""))
+        self._quiz_q_lbl.setText(str(q.get("question", "")))
         self._quiz_note_lbl.hide()
         self._quiz_next_btn.hide()
         self._quiz["answered"] = False
@@ -5094,10 +5464,12 @@ class MainWindow(QMainWindow):
             field.setFocus()
 
     def _quiz_submit(self, given: str):
-        if self._quiz is None or self._quiz["answered"]:
+        if not self._quiz or self._quiz.get("answered"):
             return
         self._quiz["answered"] = True
-        q = self._quiz["questions"][self._quiz["i"]]
+        questions = self._quiz.get("questions")
+        idx = int(self._quiz.get("i", 0))
+        q = questions[idx] if (isinstance(questions, list) and 0 <= idx < len(questions) and isinstance(questions[idx], dict)) else {}
         grader = self._quiz.get("grader")
         verdict = None
         if callable(grader):
@@ -5108,7 +5480,7 @@ class MainWindow(QMainWindow):
         self._quiz["results"].append({
             "question": q.get("question", ""),
             "type": q.get("type", ""),
-            "given": str(given or "").strip(),
+            "given": (given or "").strip(),
             "answer": q.get("answer", ""),
             "correct": verdict,
         })
@@ -5146,12 +5518,13 @@ class MainWindow(QMainWindow):
             self._quiz_render()
 
     def _quiz_finish(self):
-        if self._quiz is None:
+        if not self._quiz:
             return
-        topic = self._quiz["topic"]
-        results = self._quiz["results"]
-        right = sum(1 for r in results if r["correct"] is True)
-        unsure = sum(1 for r in results if r["correct"] is None)
+        topic = str(self._quiz.get("topic", ""))
+        raw_results = self._quiz.get("results")
+        results = [r for r in raw_results if isinstance(r, dict)] if isinstance(raw_results, list) else []
+        right = sum(1 for r in results if r.get("correct") is True)
+        unsure = sum(1 for r in results if r.get("correct") is None)
         total = len(results)
         self._quiz_panel.hide()
         self._quiz = None
@@ -5164,11 +5537,15 @@ class MainWindow(QMainWindow):
                  f"auto-marked {right}/{total} correct"
                  + (f", {unsure} still need your marking" if unsure else "")]
         for i, r in enumerate(results, 1):
-            state = ("correct" if r["correct"] is True
-                     else "wrong" if r["correct"] is False else "NEEDS MARKING")
+            state = ("correct" if r.get("correct") is True
+                     else "wrong" if r.get("correct") is False else "NEEDS MARKING")
+            q_type = r.get("type", "")
+            q_text = r.get("question", "")
+            g_text = r.get("given") or "(blank)"
+            ans = r.get("answer", "")
             lines.append(
-                f"{i}. [{r['type']}] {r['question']} | they answered: "
-                f"{r['given'] or '(blank)'} | expected: {r['answer']} | {state}")
+                f"{i}. [{q_type}] {q_text} | they answered: "
+                f"{g_text} | expected: {ans} | {state}")
         lines.append(
             "Mark every question flagged NEEDS MARKING yourself — accept an answer "
             "that means the same thing. Then tell them how they did in their own "
@@ -5267,17 +5644,28 @@ class MainWindow(QMainWindow):
 
     def _do_restart(self) -> None:
         """Perform the actual restart after a brief delay for the log message."""
-        python = sys.executable
-        script = sys.argv[0]
-        args   = sys.argv[1:]
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable] + sys.argv[1:]
+        else:
+            cmd = [sys.executable, sys.argv[0]] + sys.argv[1:]
+
+        try:
+            bridge = getattr(self, "_web_bridge", None)
+            if bridge and hasattr(bridge, "stop"):
+                bridge.stop()
+        except Exception:
+            pass
+
         try:
             if _OS == "Windows":
-                # On Windows os.execv replaces the process but can leave the
-                # console in a bad state. Popen + quit is more reliable.
-                subprocess.Popen([python, script] + args, **_WIN_HIDE)
+                try:
+                    getattr(subprocess, "Popen")(cmd, cwd=str(BASE_DIR), _allow_console=True)
+                except TypeError:
+                    subprocess.Popen(cmd, cwd=str(BASE_DIR))
                 QApplication.instance().quit()
+                QTimer.singleShot(150, lambda: os._exit(0))
             else:
-                os.execv(python, [python, script] + args)
+                os.execv(sys.executable, cmd)
         except Exception as e:
             self._log.append_log(f"ERR: Restart failed — {e}")
 
@@ -5520,6 +5908,112 @@ class MainWindow(QMainWindow):
             "while you are not holding it." if ptt
             else "Hold a key to talk instead of streaming the mic continuously.")
 
+    # ── Voice Biometrics UI Handlers ────────────────────────────────────────
+
+    def _refresh_voice_btns(self):
+        if not hasattr(self, "_voice_enroll_btn"):
+            return
+        from memory.config_manager import (
+            get_voice_verification_enabled, get_single_turn_mode
+        )
+        mgr = getattr(self, "speaker_mgr", None)
+        enrolled = bool(mgr and mgr.is_enrolled())
+
+        _on = f"""
+            QPushButton {{ background: #001a08; color: {C.GREEN};
+                border: 1px solid {C.GREEN_D}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ background: #002010; }}"""
+        _off = f"""
+            QPushButton {{ background: transparent; color: {C.TEXT_DIM};
+                border: 1px solid {C.BORDER}; border-radius: 3px;
+                text-align: left; padding: 0 8px; }}
+            QPushButton:hover {{ color: {C.TEXT}; border: 1px solid {C.BORDER_B}; }}"""
+
+        if enrolled:
+            self._voice_enroll_btn.setText("👤  VOICEPRINT: ENROLLED")
+            self._voice_enroll_btn.setStyleSheet(_on)
+            self._voice_enroll_btn.setToolTip("Your voiceprint is saved. Click to re-record and re-enroll.")
+        else:
+            self._voice_enroll_btn.setText("👤  ENROLL MY VOICE (6s)")
+            self._voice_enroll_btn.setStyleSheet(_off)
+            self._voice_enroll_btn.setToolTip("Speak for 6 seconds so JARVIS learns your voice.")
+
+        v_enabled = get_voice_verification_enabled()
+        if enrolled and v_enabled:
+            self._voice_filter_btn.setText("🔒  ONLY HEAR MY VOICE: ON")
+            self._voice_filter_btn.setStyleSheet(_on)
+            self._voice_filter_btn.setToolTip("Active: JARVIS ignores anyone else speaking in the room.")
+        elif enrolled:
+            self._voice_filter_btn.setText("🔒  ONLY HEAR MY VOICE: OFF")
+            self._voice_filter_btn.setStyleSheet(_off)
+            self._voice_filter_btn.setToolTip("Click to activate biometric voice isolation.")
+        else:
+            self._voice_filter_btn.setText("🔒  ONLY HEAR MY VOICE: (ENROLL FIRST)")
+            self._voice_filter_btn.setStyleSheet(_off)
+            self._voice_filter_btn.setToolTip("Enroll your voice first so JARVIS can recognize you.")
+
+        st_mode = get_single_turn_mode()
+        if st_mode:
+            self._single_turn_btn.setText("⏱  SINGLE-TURN SLEEP: ON")
+            self._single_turn_btn.setStyleSheet(_on)
+            self._single_turn_btn.setToolTip("Active: JARVIS sleeps immediately after answering, so you can speak to others freely.")
+        else:
+            self._single_turn_btn.setText("⏱  SINGLE-TURN SLEEP: OFF (8s)")
+            self._single_turn_btn.setStyleSheet(_off)
+            self._single_turn_btn.setToolTip("Waits 8s for follow-up speech before sleeping. Click to sleep immediately after each reply.")
+
+    def _tap_enroll_voice(self):
+        mgr = getattr(self, "speaker_mgr", None)
+        if not mgr:
+            return
+        self._voice_enroll_btn.setText("🎙  RECORDING (Speak for 6s)…")
+        self._voice_enroll_btn.setEnabled(False)
+        self.write_log("SYS: 🎙 Voice enrollment started. Please speak naturally for 6 seconds…")
+
+        def _worker():
+            try:
+                ok, msg = mgr.enroll_from_microphone(
+                    duration_seconds=6.0,
+                    progress_cb=lambda m: self._log_sig.emit(f"SYS: {m}")
+                )
+            except Exception as e:
+                ok, msg = False, str(e)
+            self._log_sig.emit(f"SYS: {'✅ ' + msg if ok else '❌ ' + msg}")
+            def _done():
+                self._voice_enroll_btn.setEnabled(True)
+                self._refresh_voice_btns()
+            from PyQt6.QtCore import QTimer
+            QTimer.singleShot(100, _done)
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _toggle_voice_filter(self):
+        from memory.config_manager import get_voice_verification_enabled
+        mgr = getattr(self, "speaker_mgr", None)
+        if not mgr or not mgr.is_enrolled():
+            self.write_log("SYS: ⚠️ Please tap 'ENROLL MY VOICE' first so JARVIS knows your voice.")
+            return
+        cur = get_voice_verification_enabled()
+        new_val = not cur
+        cb = getattr(self, "on_toggle_voice_verify", None)
+        if cb:
+            cb(new_val)
+        self.write_log(f"SYS: Biometric voice filter {'ENABLED (only hearing you)' if new_val else 'DISABLED'}.")
+        self._refresh_voice_btns()
+
+    def _toggle_single_turn(self):
+        from memory.config_manager import get_single_turn_mode
+        cur = get_single_turn_mode()
+        new_val = not cur
+        cb = getattr(self, "on_toggle_single_turn", None)
+        if cb:
+            cb(new_val)
+        self.write_log(
+            f"SYS: Single-turn sleep {'ENABLED (JARVIS sleeps immediately after answering)' if new_val else 'DISABLED (8s conversational timeout)'}."
+        )
+        self._refresh_voice_btns()
+
 
     def _refresh_hud_btn(self):
         from memory.config_manager import get_hud_style
@@ -5613,7 +6107,7 @@ class MainWindow(QMainWindow):
         cb = getattr(self, "ptt_hold", None)
         if cb:
             try:
-                cb(bool(held))
+                cb(held)
             except Exception:
                 pass
 
@@ -5694,6 +6188,8 @@ class MainWindow(QMainWindow):
             cfg.get("user_name", ""),
             cfg.get("ui_color", "") or DEFAULT_UI_COLOR,
             cfg.get("voice_name", ""),
+            cfg.get("tts_engine", "edgetts"),
+            cfg.get("tts_voice", "swara"),
             parent=cw,
         )
         ow, oh = CustomizeOverlay._OW, CustomizeOverlay._OH
@@ -5715,7 +6211,7 @@ class MainWindow(QMainWindow):
             retheme_all_widgets(old, current_palette())
 
     def _apply_name_update(self, name: str, user_name: str, ui_color: str = "",
-                           voice: str = ""):
+                           voice: str = "", tts_engine: str = "", tts_voice: str = ""):
         """Update all name/theme-dependent UI elements and persist to config."""
         self._assistant_name = name.strip() or "JARVIS"
         display = self._assistant_name.upper()
@@ -5736,14 +6232,24 @@ class MainWindow(QMainWindow):
                 retheme_all_widgets(old, current_palette())
                 color_changed = old["PRI"] != C.PRI
 
-        # Voice change → persist and, if it actually changed, rebuild the Live
-        # session so the new voice takes effect (it's fixed at connect time).
+        # Voice / engine changes
         voice_changed = False
-        if voice:
-            from memory.config_manager import get_voice, save_voice
-            if voice != get_voice():
-                save_voice(voice)
-                voice_changed = True
+        from memory.config_manager import (
+            get_voice, save_voice,
+            get_tts_engine, save_tts_engine,
+            get_tts_voice, save_tts_voice
+        )
+        if voice and voice != get_voice():
+            save_voice(voice)
+            voice_changed = True
+
+        if tts_engine and tts_engine != get_tts_engine():
+            save_tts_engine(tts_engine)
+            voice_changed = True
+
+        if tts_voice and tts_voice != get_tts_voice():
+            save_tts_voice(tts_voice)
+            voice_changed = True
 
         try:
             data = _read_full_config()
@@ -5751,12 +6257,19 @@ class MainWindow(QMainWindow):
             data["user_name"] = user_name.strip()
             if ui_color:
                 data["ui_color"] = ui_color.strip().lower()
+            if voice:
+                data["voice_name"] = voice
+            if tts_engine:
+                data["tts_engine"] = tts_engine
+            if tts_voice:
+                data["tts_voice"] = tts_voice
             API_FILE.write_text(json.dumps(data, indent=4), encoding="utf-8")
             self._log.append_log(f"SYS: Identity updated — {display}")
             if color_changed:
                 self._log.append_log(f"SYS: UI colour applied — {ui_color}")
             if voice_changed:
-                self._log.append_log(f"SYS: Voice set — {voice}")
+                v_desc = tts_voice if tts_engine == "edgetts" else voice
+                self._log.append_log(f"SYS: Voice updated [{tts_engine}] → {v_desc}")
         except Exception as e:
             self._log.append_log(f"ERR: Config save failed — {e}")
 
@@ -5788,6 +6301,20 @@ class MainWindow(QMainWindow):
         if self.on_audio_device_change:
             self.on_audio_device_change()
 
+    def _open_coding_workbench(self):
+        ov = CodingWorkbenchOverlay(parent=self.centralWidget())
+        ov.submit.connect(self._coding_workbench_submit)
+        self._centre_overlay(ov)
+        self._coding_overlay = ov
+
+    def _coding_workbench_submit(self, payload: dict):
+        if not self.on_coding_workbench:
+            return
+        result = self.on_coding_workbench(payload) or "No response."
+        ov = getattr(self, "_coding_overlay", None)
+        if ov is not None:
+            ov.set_output(str(result))
+
     # ── Memory panel ─────────────────────────────────────────────────────────
 
     def _open_memory_panel(self):
@@ -5818,7 +6345,7 @@ class MainWindow(QMainWindow):
         self._hide_confirm_banner()
         try:
             from core.confirm import resolve
-            resolve(bool(accepted))
+            resolve(accepted)
         except Exception as e:
             self._log.append_log(f"ERR: Confirmation failed — {e}")
 
@@ -5891,7 +6418,6 @@ class MainWindow(QMainWindow):
         self._set_muted(not self._muted)
 
     def _set_muted(self, muted: bool, note: str = ""):
-        muted = bool(muted)
         if muted == self._muted:
             return
         self._muted = muted
@@ -5959,6 +6485,9 @@ class MainWindow(QMainWindow):
             return False
 
     def _show_setup(self):
+        self.show()
+        self.raise_()
+        self.activateWindow()
         ov = SetupOverlay(self.centralWidget())
         cw = self.centralWidget()
         ow, oh = 460, 390
@@ -5996,12 +6525,25 @@ class _RootShim:
 
 
 class JarvisUI:
-    def __init__(self, face_path: str, size=None):
-        self._app = QApplication.instance() or QApplication(sys.argv)
+    def __init__(self, face_path: str, size=None, show_window: bool = True):
+        app = QApplication.instance()
+        if not isinstance(app, QApplication):
+            app = QApplication(sys.argv)
+        self._app = app
         self._app.setStyle("Fusion")
+        self._app.setQuitOnLastWindowClosed(False)
         self._win = MainWindow(face_path)
         self.root = _RootShim(self._app)
-        self._win.show()
+        self._avatar = None
+        self.request_say = None
+        self.wake_is_ready = None
+        self.on_wake_install = None
+        self.speaker_mgr = None
+        self.on_toggle_voice_verify = None
+        self.on_toggle_single_turn = None
+        self._web_window = None
+        if not self._win._ready or show_window:
+            self._win.show()
 
     @property
     def muted(self) -> bool:
@@ -6009,7 +6551,7 @@ class JarvisUI:
 
     @muted.setter
     def muted(self, v: bool):
-        target = bool(v)
+        target = v
         if target != self._win._muted:
             self._win._mute_sig.emit(target)
 
@@ -6057,10 +6599,18 @@ class JarvisUI:
     def on_audio_device_change(self, cb):
         self._win.on_audio_device_change = cb
 
+    @property
+    def on_mic_gain_change(self):
+        return self._win.on_mic_gain_change
+
+    @on_mic_gain_change.setter
+    def on_mic_gain_change(self, cb):
+        self._win.on_mic_gain_change = cb
+
     def show_confirm(self, title: str, detail: str) -> None:
         """Thread-safe: raise the irreversible-action gate. Called from action
         handlers running in executor threads, so it goes through a signal."""
-        self._win._confirm_sig.emit(str(title)[:120], str(detail)[:300])
+        self._win._confirm_sig.emit(title[:120], detail[:300])
 
     def hide_confirm(self) -> None:
         """Thread-safe: take the gate down."""
@@ -6176,7 +6726,7 @@ class JarvisUI:
         Returns immediately: the user answers at their own pace and the finished
         result is delivered back through on_text_command.
         """
-        self._win._quiz_sig.emit(str(topic or ""), list(questions or []), grade)
+        self._win._quiz_sig.emit(topic or "", list(questions or []), grade)
 
     def hide_quiz(self) -> None:
         """Thread-safe: clear any quiz currently on the board."""
@@ -6189,7 +6739,7 @@ class JarvisUI:
         severity is one of 'serious' / 'caution' / 'note' and decides colour and
         order here, so the caller supplies no styling of its own.
         """
-        self._win._review_sig.emit(str(title or ""), str(summary or ""),
+        self._win._review_sig.emit(title or "", summary or "",
                                    list(findings or []), list(unclear or []))
 
     def prompt_reconfig(self):
@@ -6215,8 +6765,8 @@ class JarvisUI:
         assistant worse. The user turns sound on from the header button or by
         asking, and closes it the same two ways.
         """
-        self._win._video_open_sig.emit(str(source or ""), str(title or ""),
-                                       bool(muted), str(audio_source or ""))
+        self._win._video_open_sig.emit(source or "", title or "",
+                                       muted, audio_source or "")
 
     def stop_video(self) -> None:
         """Thread-safe: close the video and give the HUD back to the avatar."""
@@ -6224,10 +6774,10 @@ class JarvisUI:
 
     def set_video_muted(self, muted: bool) -> None:
         """Thread-safe: silence or unsilence whatever is playing."""
-        self._win._video_mute_sig.emit(bool(muted))
+        self._win._video_mute_sig.emit(muted)
 
     def video_is_playing(self) -> bool:
-        return bool(self._win.video_is_playing())
+        return self._win.video_is_playing()
 
     def start_camera_stream(self) -> None:
         """Thread-safe: start live camera feed in the full HUD area."""

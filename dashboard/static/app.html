@@ -93,6 +93,8 @@
     .btn { padding:11px 15px; border:none; border-radius:12px; font-size:11px; font-weight:700; letter-spacing:1.5px; cursor:pointer; transition:opacity 0.15s,transform 0.1s; }
     .btn:active { transform: scale(0.96); }
     .btn:hover  { opacity: 0.82; }
+    .btn-notify { padding: 7px 9px; background: var(--surface); border: 1px solid var(--border); color: var(--muted); font-size: 9px; letter-spacing: 0.8px; }
+    .btn-notify.enabled { color: var(--green); border-color: rgba(34,197,94,0.35); }
     .btn-send { background: var(--accent); color: #fff; }
     .btn-wake { background:var(--surface); border:1px solid var(--border); color:var(--muted); display:none; }
     .btn-wake.show { display:block; color:var(--green); border-color:rgba(34,197,94,0.35); }
@@ -139,6 +141,7 @@
     <div class="logo"><em>J</em>ARVIS</div>
     <div class="pill" id="pill"><span class="dot"></span><span id="st">Connecting</span></div>
     <div class="enc-badge" id="enc">AES-256</div>
+    <button class="btn btn-notify" id="notify-btn" type="button">ENABLE ALERTS</button>
     <div class="spacer"></div>
     <div class="url">__IP__:__PORT__</div>
   </header>
@@ -220,7 +223,44 @@
       if (m.type === 'wake')          sys('Wake word detected — connecting…');
       if (m.type === 'sys')           sys(m.text);
       if (m.type === 'file_received') _onFileReceived(m);
+      if (m.type === 'task_event')    _onTaskEvent(m);
     };
+
+    const notifyBtn = document.getElementById('notify-btn');
+    function refreshNotifyButton() {
+      const available = 'Notification' in window && window.isSecureContext;
+      const enabled = available && Notification.permission === 'granted';
+      notifyBtn.textContent = enabled ? 'ALERTS ON' : (available ? 'ENABLE ALERTS' : 'HTTPS REQUIRED');
+      notifyBtn.classList.toggle('enabled', enabled);
+    }
+    notifyBtn.addEventListener('click', async () => {
+      if (!('Notification' in window) || !window.isSecureContext) {
+        toast('Open the secure HTTPS dashboard on your phone to enable alerts.');
+        return;
+      }
+      const permission = await Notification.requestPermission();
+      refreshNotifyButton();
+      toast(permission === 'granted' ? 'Task alerts enabled on this device.' : 'Notification permission was not granted.');
+    });
+    refreshNotifyButton();
+
+    function _onTaskEvent(m) {
+      if (!['completed', 'failed', 'needs_review'].includes(m.status) || !m.event_id) return;
+      const storageKey = 'jarvis_seen_task_events';
+      let seen = [];
+      try { seen = JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch {}
+      if (seen.includes(m.event_id)) return;
+      seen.push(m.event_id);
+      try { localStorage.setItem(storageKey, JSON.stringify(seen.slice(-100))); } catch {}
+      const title = String(m.title || 'JARVIS task update');
+      const body = String(m.body || 'A scheduled task needs your attention.');
+      sys(`${title} (${m.job_id || 'task'})`);
+      toast(title);
+      if ('Notification' in window && window.isSecureContext && Notification.permission === 'granted') {
+        const notice = new Notification(title, { body, tag: `jarvis-${m.event_id}` });
+        notice.onclick = () => { window.focus(); notice.close(); };
+      }
+    }
 
     function setStatus(s) {
       if (s === 'active') {

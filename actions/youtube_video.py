@@ -288,6 +288,11 @@ def _handle_play(parameters: dict, player) -> str:
 
     if player:
         player.write_log(f"[YouTube] Searching: {query}")
+        if hasattr(player, "stop_video"):
+            try:
+                player.stop_video()
+            except Exception:
+                pass
 
     print(f"[YouTube] 🔍 Scraping first non-Shorts video for: {query}")
 

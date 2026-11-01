@@ -1,0 +1,16 @@
+[
+  {
+    "product_id": "fash_live_001",
+    "name": "Emerald Satin Pleated Midi Dress",
+    "merchant": "Myntra",
+    "price": 2499.0,
+    "currency": "INR",
+    "source_url": "https://www.myntra.com/dresses/...",
+    "affiliate_url": "https://your-affiliate-link.com/...",
+    "image_path": "C:/jarvis/Mark-LV-main/Mark-LV-main/workspace/content_business/fashion/assets/dress_001.png",
+    "description": "Flowing emerald satin midi dress with pleated skirt and cinched waist.",
+    "availability": "in_stock",
+    "commission_rate": 8.5,
+    "trend_score": 95.0
+  }
+]

@@ -1,0 +1,24 @@
+{
+    "extraPaths": [
+        ".",
+        "core",
+        "content_business"
+    ],
+    "typeCheckingMode": "off",
+    "exclude": [
+        "**/.venv",
+        "**/build",
+        "**/dist",
+        "**/node_modules",
+        "**/.agents"
+    ],
+    "reportGeneralTypeIssues": "none",
+    "reportArgumentType": "none",
+    "reportIncompatibleMethodOverride": "none",
+    "reportOptionalMemberAccess": "none",
+    "reportOptionalCall": "none",
+    "reportPossiblyUnboundVariable": "none",
+    "reportAttributeAccessIssue": "none",
+    "reportReturnType": "none",
+    "reportCallIssue": "none"
+}

@@ -139,6 +139,7 @@ class WhatsAppTests(unittest.TestCase):
 
         with (patch.object(confirm, "pending_title", return_value=""),
               patch.object(confirm, "request", return_value="[CONFIRMATION_PENDING]") as request,
+              patch.object(send_message, "_PYAUTOGUI", True),
               patch.object(send_message, "_send_message_now") as send_now):
             result = send_message.send_message({
                 "receiver": "Alex Johnson",

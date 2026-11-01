@@ -9,10 +9,14 @@ try:
 except ImportError:
     _PSUTIL = False
 
+try:
+    import pygetwindow as gw
+except ImportError:
+    pass
+
 _SYSTEM = platform.system()
 
 _APP_ALIASES: dict[str, dict[str, str]] = {
-
     "chrome":             {"Windows": "chrome",                  "Darwin": "Google Chrome",        "Linux": "google-chrome"},
     "google chrome":      {"Windows": "chrome",                  "Darwin": "Google Chrome",        "Linux": "google-chrome"},
     "firefox":            {"Windows": "firefox",                 "Darwin": "Firefox",              "Linux": "firefox"},
@@ -64,21 +68,40 @@ _APP_ALIASES: dict[str, dict[str, str]] = {
     "epic games":         {"Windows": "EpicGamesLauncher",       "Darwin": "Epic Games Launcher",  "Linux": "legendary"},
 }
 
-
 def _normalize(raw: str) -> str:
     key = raw.lower().strip()
-
     if key in _APP_ALIASES:
         return _APP_ALIASES[key].get(_SYSTEM, raw)
-
     for alias_key, os_map in _APP_ALIASES.items():
         if alias_key in key or key in alias_key:
             return os_map.get(_SYSTEM, raw)
-
     return raw  
 
+def _wait_for_window(app_name: str, timeout: float = 8.0) -> bool:
+    """Waits until the app window is visible and active on screen."""
+    if _SYSTEM != "Windows":
+        time.sleep(1.5)
+        return True
+    
+    deadline = time.time() + timeout
+    search_term = app_name.lower().replace(".exe", "")
+    
+    while time.time() < deadline:
+        try:
+            for win in gw.getAllWindows():
+                if win.visible and search_term in win.title.lower():
+                    try:
+                        win.activate()
+                        time.sleep(0.3)
+                        return True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        time.sleep(0.4)
+    return False
+
 def _launch_windows_whatsapp() -> bool:
-    """Launch the installed WhatsApp Store/PWA entry by its registered app ID."""
     script = (
         "$app = Get-StartApps | Where-Object { $_.Name -eq 'WhatsApp' } "
         "| Select-Object -First 1; "
@@ -99,23 +122,35 @@ def _launch_windows_whatsapp() -> bool:
         )
         if result.returncode == 0:
             return True
-        print("[open_app] No registered WhatsApp or WhatsApp Web app was launched.")
     except Exception as e:
         print(f"[open_app] WhatsApp app registration launch failed: {e}")
     return False
 
-
 def _launch_windows(app_name: str) -> bool:
+    app_clean = app_name.strip().lower()
 
-    if app_name.strip().casefold() in {"whatsapp", "whatsapp web"}:
-        # Resolve the actual Start Apps entry instead of passing the friendly name
-        # to a shell, where it may fail silently or open an unrelated result.
+    if app_clean in {"whatsapp", "whatsapp web"}:
         return _launch_windows_whatsapp()
 
-    if shutil.which(app_name) or shutil.which(app_name.split(".")[0]):
+    direct_exes = {
+        "notepad": "notepad.exe",
+        "calculator": "calc.exe",
+        "paint": "mspaint.exe",
+        "cmd": "cmd.exe",
+        "terminal": "wt.exe",
+        "explorer": "explorer.exe",
+        "file explorer": "explorer.exe",
+        "task manager": "taskmgr.exe",
+        "chrome": "chrome.exe",
+        "edge": "msedge.exe",
+    }
+
+    target_cmd = direct_exes.get(app_clean, app_name)
+
+    if shutil.which(target_cmd) or shutil.which(target_cmd.split(".")[0]):
         try:
             subprocess.Popen(
-                app_name,
+                target_cmd,
                 shell=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -135,57 +170,42 @@ def _launch_windows(app_name: str) -> bool:
 
     try:
         import pyautogui
-        pyautogui.PAUSE = 0.1
+        pyautogui.PAUSE = 0.05
         pyautogui.press("win")
+        time.sleep(0.5)
+        pyautogui.write(f"apps: {app_name}", interval=0.03)
         time.sleep(0.7)
-        pyautogui.write(app_name, interval=0.05)
-        time.sleep(0.9)
         pyautogui.press("enter")
-        time.sleep(2.5)
+        time.sleep(1.5)
         return True
     except Exception as e:
         print(f"[open_app] Start Menu search failed: {e}")
 
     return False
 
-
 def _launch_macos(app_name: str) -> bool:
-
     try:
-        result = subprocess.run(
-            ["open", "-a", app_name],
-            capture_output=True, timeout=8
-        )
+        result = subprocess.run(["open", "-a", app_name], capture_output=True, timeout=8)
         if result.returncode == 0:
             time.sleep(1.0)
             return True
     except Exception:
         pass
-
     try:
-        result = subprocess.run(
-            ["open", "-a", f"{app_name}.app"],
-            capture_output=True, timeout=8
-        )
+        result = subprocess.run(["open", "-a", f"{app_name}.app"], capture_output=True, timeout=8)
         if result.returncode == 0:
             time.sleep(1.0)
             return True
     except Exception:
         pass
-
     binary = shutil.which(app_name) or shutil.which(app_name.lower())
     if binary:
         try:
-            subprocess.Popen(
-                [binary],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
             return True
         except Exception:
             pass
-
     try:
         import pyautogui
         pyautogui.hotkey("command", "space")
@@ -197,9 +217,7 @@ def _launch_macos(app_name: str) -> bool:
         return True
     except Exception as e:
         print(f"[open_app] Spotlight failed: {e}")
-
     return False
-
 
 _LINUX_TERMINAL_FALLBACKS = [
     "x-terminal-emulator", "gnome-terminal", "konsole", "xfce4-terminal",
@@ -207,8 +225,6 @@ _LINUX_TERMINAL_FALLBACKS = [
 ]
 
 def _launch_linux(app_name: str) -> bool:
-
-    # terminal emulators: try common ones in order
     if app_name in ("x-terminal-emulator", "gnome-terminal", "terminal"):
         for term in _LINUX_TERMINAL_FALLBACKS:
             if shutil.which(term):
@@ -218,7 +234,6 @@ def _launch_linux(app_name: str) -> bool:
                     return True
                 except Exception:
                     continue
-
     binary = (
         shutil.which(app_name) or
         shutil.which(app_name.lower()) or
@@ -227,42 +242,28 @@ def _launch_linux(app_name: str) -> bool:
     )
     if binary:
         try:
-            subprocess.Popen(
-                [binary],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL
-            )
+            subprocess.Popen([binary], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1.0)
             return True
         except Exception:
             pass
-
     try:
-        subprocess.run(
-            ["xdg-open", app_name],
-            capture_output=True, timeout=5
-        )
+        subprocess.run(["xdg-open", app_name], capture_output=True, timeout=5)
         return True
     except Exception:
         pass
-
     for desktop_name in [
         app_name.lower(),
         app_name.lower().replace(" ", "-"),
         app_name.lower().replace(" ", ""),
     ]:
         try:
-            result = subprocess.run(
-                ["gtk-launch", desktop_name],
-                capture_output=True, timeout=5
-            )
+            result = subprocess.run(["gtk-launch", desktop_name], capture_output=True, timeout=5)
             if result.returncode == 0:
                 return True
         except Exception:
             pass
-
     return False
-
 
 _OS_LAUNCHERS = {
     "Windows": _launch_windows,
@@ -270,14 +271,8 @@ _OS_LAUNCHERS = {
     "Linux":   _launch_linux,
 }
 
-def open_app(
-    parameters=None,
-    response=None,
-    player=None,
-    session_memory=None,
-) -> str:
+def open_app(parameters=None, response=None, player=None, session_memory=None) -> str:
     app_name = (parameters or {}).get("app_name", "").strip()
-
     if not app_name:
         return "No application name provided."
 
@@ -286,27 +281,27 @@ def open_app(
         return f"Unsupported operating system: {_SYSTEM}"
 
     normalized = _normalize(app_name)
-    print(f"[open_app] Launching: '{app_name}' → '{normalized}' ({_SYSTEM})")
+    print(f"[open_app] Launching: '{app_name}' -> '{normalized}' ({_SYSTEM})")
 
     if player:
         player.write_log(f"[open_app] {app_name}")
 
     try:
-        if launcher(normalized):
-            return f"Opened {app_name}."
-        if normalized.lower() != app_name.lower():
-            if launcher(app_name):
-                return f"Opened {app_name}."
-        return (
-            f"Could not confirm that {app_name} launched. "
-            f"It may still be loading, or it might not be installed."
-        )
+        launched = launcher(normalized)
+        if not launched and normalized.lower() != app_name.lower():
+            launched = launcher(app_name)
+            
+        if launched:
+            # Verify window appearance before giving control back
+            if _wait_for_window(app_name):
+                return f"Opened {app_name} and verified window is ready on screen."
+            return f"Opened {app_name}, but window focus could not be verified."
+            
+        return f"Could not launch {app_name}."
     except Exception as e:
         print(f"[open_app] Error: {e}")
         return f"Failed to open {app_name}: {e}"
 
-
-# ── Tool declaration (auto-discovered by core/action_loader.py) ──────────────
 TOOL = {
     "name": "open_app",
     "description": "Opens any application on the computer. Use this whenever the user asks to open, launch, or start any app, website, or program. Always call this tool — never just say you opened it.",
@@ -318,9 +313,7 @@ TOOL = {
                 "description": "Exact name of the application (e.g. 'WhatsApp', 'Chrome', 'Spotify')"
             }
         },
-        "required": [
-            "app_name"
-        ]
+        "required": ["app_name"]
     },
     "handler": open_app,
 }

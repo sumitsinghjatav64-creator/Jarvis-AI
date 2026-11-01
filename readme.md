@@ -1,4 +1,4 @@
-﻿```markdown
+```markdown
 # JARVIS AI (Mark-LV)
 
 A modular desktop assistant and AI companion built with Python, PyQt6, a Three.js visionOS-style Liquid Glass web interface, and the Gemini Live API. It combines real-time low-latency bidirectional voice interaction, computer vision with hand-gesture tracking, proactive system telemetry, and a self-healing action/plugin ecosystem.
@@ -10,7 +10,7 @@ This repository is a customized continuation of the Mark LV project by FatihMake
 ## 🚀 Key Highlights & Capabilities
 
 ### Core Architecture & UI
-* **Liquid Glass Web UI**: A visionOS-inspired interface (`ui improved.html`) running on FastAPI and WebSockets, complete with procedural Three.js particle orb rendering, ambient reactive lighting, and real-time audio visualization[cite: 13, 17].
+* **Liquid Glass Web UI**: A visionOS-inspired interface (`ui_improved.html`) running on FastAPI and WebSockets, complete with procedural Three.js particle orb rendering, ambient reactive lighting, and real-time audio visualization[cite: 13, 17].
 * **Live Camera & Hand-Gesture PIP**: Built-in MediaPipe hand landmark tracking streamed to a picture-in-picture card[cite: 13, 15, 17]. Control your assistant with physical gestures (e.g., Open Palm to toggle mute, Thumbs Up to interrupt speech)[cite: 14, 15].
 * **Real-Time Gemini Live Audio**: Sub-second full-duplex conversations powered by the Gemini Live API with automatic 16 kHz PCM streaming and nested payload extraction[cite: 15].
 * **Formant-Driven Lip-Sync & Visemes**: Real-time spectral analysis generating ~50 mouth shapes per second across formants and text transcripts, keeping avatar and waveform movements locked to actual speech timing[cite: 15].
@@ -33,7 +33,7 @@ Mark-LV/
 ├── main.py                     # Application entry point & Gemini Live lifecycle
 ├── ui.py                       # PyQt6 HUD windows, settings overlays, and widgets
 ├── web_bridge.py               # FastAPI/WebSocket bridge serving the web frontend
-├── ui improved.html            # Three.js Liquid Glass frontend interface
+├── ui_improved.html            # Three.js Liquid Glass frontend interface
 ├── setup.py                    # Cross-platform dependency & browser installer
 ├── requirements.txt            # Python environment dependencies
 ├── actions/                    # Built-in system control, automation, & search tools

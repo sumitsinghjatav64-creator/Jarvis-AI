@@ -1,0 +1,26 @@
+{
+  "mode": "DEMO",
+  "zero_spend_enforced": true,
+  "public_publishing_enabled": false,
+  "auto_mode_authorized": false,
+  "fashion_channel_enabled": true,
+  "kids_channel_enabled": true,
+  "max_daily_fashion_posts": 2,
+  "max_daily_kids_posts": 1,
+  "gemini_daily_free_call_limit": 45,
+  "youtube_daily_upload_limit": 5,
+  "instagram_daily_post_limit": 5,
+  "tts_engine": "edgetts",
+  "tts_voice_fashion": "hi-IN-SwaraNeural",
+  "tts_voice_kids": "hi-IN-MadhurNeural",
+  "fashion_influencer_name": "Aanya",
+  "fashion_influencer_seed": 40502026,
+  "fashion_influencer_persona": "Photorealistic 23-year-old Indian female fashion influencer named Aanya, warm golden-wheatish complexion, expressive dark brown eyes, long layered dark brown hair, delicate gold hoop earrings, natural dewy makeup, confident editorial posture, shot on 85mm lens, ultra-detailed skin and fabric texture",
+  "schedule_fashion_times": [
+    "11:00",
+    "18:00"
+  ],
+  "schedule_kids_times": [
+    "15:00"
+  ]
+}

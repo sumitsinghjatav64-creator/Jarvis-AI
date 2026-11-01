@@ -61,12 +61,15 @@ desktop.ini
 logs/
 downloads/
 screenshots/
-# ── Backups & temporary snapshots ─────────────────────────────────────────────
-.backup/
-*.bak
+ui_diagnostics.log
 
-# ── Frontend & Node dependencies ──────────────────────────────────────────────
+# ── Local workspace, browser profiles, and cloned repositories ─────────────────
+workspace/
+
+# ── Frontend & Node dependencies ───────────────────────────────────────────────
 node_modules/
+package-lock.json
+
 # ── Backups & temporary snapshots ─────────────────────────────────────────────
 .backup/
 *.bak
@@ -74,3 +77,6 @@ node_modules/
 *.tmp
 cfg_*.tmp
 jarvis_fw_*.bat
+# Local models and voiceprints
+memory/*.npy
+config/speaker_model.onnx

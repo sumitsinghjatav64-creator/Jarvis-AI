@@ -21,13 +21,14 @@ import queue
 import subprocess
 import sys
 import threading
+from collections import deque
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional, Tuple
 
 # Pretrained openwakeword model that listens for "Hey Jarvis".
 WAKE_MODEL = "hey_jarvis"
 # Score in [0,1]; above this counts as a detection. Tunable per environment.
-DEFAULT_THRESHOLD = 0.5
+DEFAULT_THRESHOLD = 0.40
 # Mic frames arrive at 16 kHz int16; this is just the detector's input rate.
 SAMPLE_RATE = 16000
 
@@ -62,7 +63,7 @@ def is_ready() -> bool:
                    or any(models_dir.glob("melspectrogram*.tflite")))
         has_emb = (any(models_dir.glob("embedding_model*.onnx"))
                    or any(models_dir.glob("embedding_model*.tflite")))
-        return bool(has_wake and has_mel and has_emb)
+        return has_wake and has_mel and has_emb
     except Exception:
         return False
 
@@ -115,15 +116,18 @@ class WakeWordDetector:
 
     def __init__(self, on_detect: Callable[[], None],
                  threshold: float = DEFAULT_THRESHOLD,
+                 verifier: Optional[Callable[[list], Tuple[bool, float]]] = None,
                  logger: Callable[[str], None] = print,
                  notify: Callable[[str], None] | None = None):
         self._on_detect = on_detect
         self._threshold = threshold
+        self._verifier  = verifier
         self._logger    = logger
         # See PluginRegistry: `logger` is the console and gets everything,
         # `notify` is the activity log and gets only what the user must act on.
         self._notify    = notify or (lambda _msg: None)
         self._queue: queue.Queue = queue.Queue(maxsize=50)
+        self._history: deque = deque(maxlen=25)
         self._thread: threading.Thread | None = None
         self._running = False
         self._model = None
@@ -135,6 +139,20 @@ class WakeWordDetector:
         if self._running:
             return True
         try:
+            try:
+                import onnxruntime as ort
+                avail = ort.get_available_providers()
+                hw = [p for p in ["CUDAExecutionProvider", "DmlExecutionProvider"] if p in avail]
+                if hw:
+                    class _GpuInferenceSession(ort.InferenceSession):
+                        def __init__(self, *args, **kwargs):
+                            kwargs["providers"] = hw + ["CPUExecutionProvider"]
+                            super().__init__(*args, **kwargs)
+
+                    setattr(ort, "InferenceSession", _GpuInferenceSession)
+                    self._logger(f"Wake word: accelerated via GPU ({hw[0]}).")
+            except Exception:
+                pass
             from openwakeword.model import Model
             self._model = Model(wakeword_models=[WAKE_MODEL], inference_framework="onnx")
         except Exception as e:
@@ -184,6 +202,9 @@ class WakeWordDetector:
                 frame = self._queue.get()
                 if frame is None or not self._running:
                     break
+                self._history.append(frame)
+                if self._model is None:
+                    continue
                 scores = self._model.predict(np.asarray(frame, dtype=np.int16))
                 score = 0.0
                 if isinstance(scores, dict):
@@ -194,8 +215,20 @@ class WakeWordDetector:
                     if score == 0.0 and scores:
                         score = max(float(v) for v in scores.values())
                 if score >= self._threshold:
+                    # If speaker verification is enabled, check speaker voiceprint
+                    if self._verifier is not None:
+                        is_owner, sim_score = self._verifier(list(self._history))
+                        if not is_owner:
+                            self._logger(
+                                f"Wake word: 'Hey Jarvis' heard, but speaker was rejected (similarity: {sim_score:.2f})."
+                            )
+                            self._drain()
+                            self._history.clear()
+                            continue
+
                     # drain any backlog so we don't double-fire on the same utterance
                     self._drain()
+                    self._history.clear()
                     try:
                         self._on_detect()
                     except Exception as e:

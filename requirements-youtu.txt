@@ -1,0 +1,3 @@
+# Optional JARVIS integration. Install only in the JARVIS project environment.
+# Reviewed upstream Youtu-Agent commit; this installs its Python dependencies too.
+youtu-agent @ git+https://github.com/TencentCloudADP/youtu-agent.git@c2caa539f4c95ae1c39ed24dc8a99cb3651e1d5d

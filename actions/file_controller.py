@@ -90,8 +90,14 @@ def _restore_from_trash(original: Path) -> str:
             f"automatically, but it is there and can be restored by hand.")
 
 
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent
+_WORKSPACE_ROOT = _PROJECT_ROOT / "workspace"
+_WORKSPACE_ROOT.mkdir(parents=True, exist_ok=True)
+
 _SAFE_ROOTS: list[Path] = [
     Path.home(),
+    _PROJECT_ROOT,
+    _WORKSPACE_ROOT,
 ]
 
 def _is_safe_path(target: Path) -> bool:
@@ -157,6 +163,7 @@ def _resolve_path(raw: str) -> Path:
         "music":     _get_music(),
         "videos":    _get_videos(),
         "home":      Path.home(),
+        "workspace": _WORKSPACE_ROOT,
     }
     raw   = raw.strip().strip('"').strip("'")
     lower = raw.lower()

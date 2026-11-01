@@ -1,0 +1,37 @@
+/* animations.css - Apple-Grade Spring Keyframes and Glow Effects */
+
+@keyframes pulseDot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+}
+
+@keyframes laserSweep {
+  0% {
+    filter: hue-rotate(0deg);
+    transform: rotate(0deg);
+  }
+  100% {
+    filter: hue-rotate(360deg);
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes dropzoneGlow {
+  0%, 100% {
+    box-shadow: 0 0 15px rgba(56, 189, 248, 0.4), inset 0 0 10px rgba(56, 189, 248, 0.2);
+  }
+  50% {
+    box-shadow: 0 0 25px rgba(168, 85, 247, 0.7), inset 0 0 18px rgba(168, 85, 247, 0.4);
+  }
+}
+
+.dynamic-island.drag-over {
+  animation: dropzoneGlow 1.2s infinite ease-in-out;
+  border-color: rgba(56, 189, 248, 0.6);
+}

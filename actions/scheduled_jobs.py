@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from core.job_store import job_store
+from core.task_events import publish_task_event
 
 
 def _render_job(job: dict) -> str:
@@ -74,6 +75,8 @@ def scheduled_job(parameters: dict, player=None) -> str:
             return f"Task {job_id} is not running; completion report ignored."
         result = str(params.get("result", ""))[:5000]
         ok = job_store.finish(job_id, result, failed=action == "fail")
+        if ok:
+            publish_task_event(job_id, "failed" if action == "fail" else "completed")
         return f"Task {job_id} marked {('failed' if action == 'fail' else 'completed')}." if ok else "Task state changed; report ignored."
 
     return "Unknown action. Use schedule, list, cancel, retry, complete, or fail."

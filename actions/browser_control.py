@@ -523,7 +523,7 @@ class _BrowserSession:
 
         if self._spec is None:
             raise RuntimeError(
-                f"'{self.browser_name}' bu platformda ({_OS}) desteklenmiyor."
+                f"'{self.browser_name}' is not supported on this platform ({_OS})."
             )
 
         engine_name = self._spec["engine"]

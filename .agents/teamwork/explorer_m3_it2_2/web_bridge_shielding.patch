@@ -1,0 +1,192 @@
+--- a/web_bridge.py
++++ b/web_bridge.py
+@@ -458,63 +458,74 @@
+         wid = str(widget_id or "").strip()
+         act = str(action_id or "").strip()
+         pld = payload if isinstance(payload, dict) else {}
+ 
+-        # d) If action_id == "dismiss", evict widget_id from self._active_widgets
+-        if act == "dismiss":
+-            with self._widgets_lock:
+-                self._active_widgets.pop(wid, None)
+-
+-        # a) To registered handler in self._action_handlers
+-        handler_entry = None
+-        with self._action_handlers_lock:
+-            handler_entry = self._action_handlers.get(act) or self._action_handlers.get("*")
+-
+-        if handler_entry is not None:
+-            cb, run_on_qt = handler_entry
+-
+-            def _invoke_registered():
+-                try:
+-                    sig = inspect.signature(cb)
+-                    params = list(sig.parameters.values())
+-                    has_varargs = any(
+-                        p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+-                        for p in params
+-                    )
+-                    num_params = len(params)
+-                    if has_varargs or num_params >= 3:
+-                        cb(wid, act, pld)
+-                    elif num_params == 2:
+-                        cb(wid, pld)
+-                    elif num_params == 1:
+-                        cb(pld)
+-                    else:
+-                        cb()
+-                except (ValueError, TypeError):
+-                    try:
+-                        cb(wid, act, pld)
+-                    except TypeError:
+-                        try:
+-                            cb(wid, pld)
+-                        except TypeError:
+-                            try:
+-                                cb(pld)
+-                            except TypeError:
+-                                cb()
+-                except Exception as exc:
+-                    logger.error("Error executing widget action handler for %r: %s", act, exc, exc_info=True)
+-
+-            if run_on_qt:
+-                self._run_on_qt_thread(_invoke_registered)
+-            else:
+-                _invoke_registered()
+-
+-        # b) To self.on_widget_action(widget_id, action_id, payload) if set
+-        if self.on_widget_action is not None and callable(self.on_widget_action):
+-            try:
+-                self.on_widget_action(wid, act, pld)
+-            except Exception as exc:
+-                logger.error("Error in on_widget_action: %s", exc, exc_info=True)
+-        elif hasattr(self, "_widget_action_handler") and callable(self._widget_action_handler) and self._widget_action_handler != self.on_widget_action:
+-            try:
+-                self._widget_action_handler(wid, act, pld)
+-            except Exception as exc:
+-                logger.error("Error in _widget_action_handler: %s", exc, exc_info=True)
+-
+-        # c) To self.ui.on_widget_action(widget_id, action_id, payload) if present on self.ui
+-        ui_act = getattr(self.ui, "on_widget_action", None)
+-        if ui_act is not None and callable(ui_act):
+-            try:
+-                ui_act(wid, act, pld)
+-            except Exception as exc:
+-                logger.error("Error in ui.on_widget_action: %s", exc, exc_info=True)
++        try:
++            # d) If action_id == "dismiss", evict widget_id from self._active_widgets
++            if act == "dismiss":
++                with self._widgets_lock:
++                    self._active_widgets.pop(wid, None)
++
++            # a) To registered handler in self._action_handlers
++            handler_entry = None
++            with self._action_handlers_lock:
++                handler_entry = self._action_handlers.get(act) or self._action_handlers.get("*")
++
++            if handler_entry is not None:
++                cb, run_on_qt = handler_entry
++
++                def _invoke_registered():
++                    call_mode = 3
++                    try:
++                        sig = inspect.signature(cb)
++                        params = list(sig.parameters.values())
++                        has_varargs = any(
++                            p.kind in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
++                            for p in params
++                        )
++                        if has_varargs or len(params) >= 3:
++                            call_mode = 3
++                        elif len(params) == 2:
++                            call_mode = 2
++                        elif len(params) == 1:
++                            call_mode = 1
++                        else:
++                            call_mode = 0
++                    except (ValueError, TypeError):
++                        call_mode = "fallback"
++
++                    try:
++                        if call_mode == 3:
++                            cb(wid, act, pld)
++                        elif call_mode == 2:
++                            cb(wid, pld)
++                        elif call_mode == 1:
++                            cb(pld)
++                        elif call_mode == 0:
++                            cb()
++                        else:
++                            try:
++                                cb(wid, act, pld)
++                            except TypeError:
++                                try:
++                                    cb(wid, pld)
++                                except TypeError:
++                                    try:
++                                        cb(pld)
++                                    except TypeError:
++                                        cb()
++                    except Exception as exc:
++                        logger.error("Error executing widget action handler for %r: %s", act, exc, exc_info=True)
++                    except BaseException as exc:
++                        logger.critical("Fatal exception in widget action handler for %r: %s", act, exc, exc_info=True)
++
++                try:
++                    if run_on_qt:
++                        self._run_on_qt_thread(_invoke_registered)
++                    else:
++                        _invoke_registered()
++                except Exception as exc:
++                    logger.error("Error dispatching widget action for %r: %s", act, exc, exc_info=True)
++
++            # b) To self.on_widget_action(widget_id, action_id, payload) if set
++            if self.on_widget_action is not None and callable(self.on_widget_action):
++                try:
++                    self.on_widget_action(wid, act, pld)
++                except Exception as exc:
++                    logger.error("Error in on_widget_action: %s", exc, exc_info=True)
++            elif hasattr(self, "_widget_action_handler") and callable(self._widget_action_handler) and self._widget_action_handler != self.on_widget_action:
++                try:
++                    self._widget_action_handler(wid, act, pld)
++                except Exception as exc:
++                    logger.error("Error in _widget_action_handler: %s", exc, exc_info=True)
++
++            # c) To self.ui.on_widget_action(widget_id, action_id, payload) if present on self.ui
++            ui_act = getattr(self.ui, "on_widget_action", None)
++            if ui_act is not None and callable(ui_act):
++                try:
++                    ui_act(wid, act, pld)
++                except Exception as exc:
++                    logger.error("Error in ui.on_widget_action: %s", exc, exc_info=True)
++        except Exception as exc:
++            logger.error("Unexpected error in _dispatch_widget_action for widget %r, action %r: %s", widget_id, action_id, exc, exc_info=True)
+ 
+     def _port_is_free(self) -> bool:
+         probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+@@ -810,13 +821,16 @@
+                         self._run_on_qt_thread(_run_qt_action)
+                     elif mtype == "widget_action":
+-                        widget_id = str(msg.get("widget_id") or "").strip()
+-                        action_id = str(msg.get("action_id") or "").strip()
+-                        payload = msg.get("payload")
+-                        if not isinstance(payload, dict):
+-                            payload = {}
+-                        if not widget_id or not action_id:
+-                            logger.warning("Dropped invalid widget_action: %s", msg)
+-                            continue
+-                        self._dispatch_widget_action(widget_id, action_id, payload)
++                        try:
++                            widget_id = str(msg.get("widget_id") or "").strip()
++                            action_id = str(msg.get("action_id") or "").strip()
++                            payload = msg.get("payload")
++                            if not isinstance(payload, dict):
++                                payload = {}
++                            if not widget_id or not action_id:
++                                logger.warning("Dropped invalid widget_action: %s", msg)
++                                continue
++                            self._dispatch_widget_action(widget_id, action_id, payload)
++                        except Exception as exc:
++                            logger.error("Error dispatching widget_action: %s", exc, exc_info=True)
+ 
+             except WebSocketDisconnect:

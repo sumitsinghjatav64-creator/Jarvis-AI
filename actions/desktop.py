@@ -1,4 +1,3 @@
-#desktop.py
 import os
 import sys
 import json
@@ -17,7 +16,6 @@ except ImportError:
 
 _OS = platform.system()  # "Windows" | "Darwin" | "Linux"
 
-
 def _get_base_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).parent
@@ -35,123 +33,23 @@ def _get_desktop() -> Path:
             return Path(xdg)
     return Path.home() / "Desktop"
 
-def _build_sandbox() -> dict:
-    import time
-
-    safe_builtins = {
-        "print": print,
-        "len": len, "str": str, "int": int, "float": float,
-        "bool": bool, "list": list, "dict": dict, "tuple": tuple,
-        "range": range, "enumerate": enumerate, "sorted": sorted,
-        "isinstance": isinstance, "hasattr": hasattr, "getattr": getattr,
-        "max": max, "min": min, "sum": sum, "abs": abs,
-        "zip": zip, "map": map, "filter": filter,
-    }
-
-    sandbox = {
-        "__builtins__": safe_builtins,
-        "Path": Path,
-        "time": time,
-        "shutil": type("shutil", (), {
-            "copy2":      shutil.copy2,
-            "copytree":   shutil.copytree,
-            "disk_usage": shutil.disk_usage,
-        })(),
-        "os_path": os.path,  
-    }
-
-    if _PYAUTOGUI:
-        sandbox["pyautogui"] = pyautogui
-
-    if _OS == "Windows":
-        try:
-            import ctypes
-            import winreg
-            sandbox["ctypes"] = ctypes
-            sandbox["winreg"] = type("winreg", (), {
-                # Sadece okuma
-                "OpenKey":      winreg.OpenKey,
-                "QueryValueEx": winreg.QueryValueEx,
-                "HKEY_CURRENT_USER": winreg.HKEY_CURRENT_USER,
-            })()
-        except ImportError:
-            pass
-
-    return sandbox
-
-
-def _execute_generated_code(code: str, player=None) -> str:
-    if not code or code.strip() == "UNSAFE":
-        return "This action cannot be performed safely."
-
-    # Kod temizleme
-    if code.startswith("```"):
-        lines = code.split("\n")
-        code  = "\n".join(lines[1:-1]).strip()
-
-    sandbox      = _build_sandbox()
-    output_lines = []
-    sandbox["__builtins__"]["print"] = lambda *a: output_lines.append(" ".join(str(x) for x in a))
-
-    try:
-        exec(compile(code, "<jarvis_desktop>", "exec"), sandbox)
-        return "\n".join(output_lines) if output_lines else "Done."
-    except Exception as e:
-        print(f"[Desktop] Exec error: {e}\nCode:\n{code[:300]}")
-        return f"Execution error: {e}"
-
-
-def _ask_gemini_for_desktop_action(task: str) -> str:
-
-    from google import genai as _genai
-
-    desktop = str(_get_desktop())
-
-    os_specific = ""
-    if _OS == "Windows":
-        os_specific = "- ctypes (Windows API calls, read-only)\n- winreg (registry READ only)"
-    elif _OS == "Darwin":
-        os_specific = "- subprocess is NOT available; use pyautogui or Path only"
-    else:
-        os_specific = "- subprocess is NOT available; use pyautogui or Path only"
-
-    prompt = f"""You are a desktop automation assistant.
-Current OS: {_OS}
-Desktop path: {desktop}
-
-Generate safe Python code to accomplish the task below.
-Allowed modules ONLY:
-- pyautogui (mouse, keyboard — if needed)
-- pathlib.Path (file/folder inspection only, no deletion)
-- shutil.copy2, shutil.copytree, shutil.disk_usage (NO move, NO rmtree)
-- os_path (os.path equivalent, read-only)
-- time.sleep
-{os_specific}
-
-Hard rules:
-- NO file deletion (no unlink, no rmtree, no remove)
-- NO subprocess calls
-- NO exec() or eval() inside the code
-- NO import statements (modules are pre-injected)
-- NO file write operations except explicitly requested
-- If task cannot be done safely with these tools, output exactly: UNSAFE
-
-Output ONLY the Python code. No explanation, no markdown, no backticks.
-
-Task: {task}"""
-
-    try:
-        from core import gemini
-        response = gemini.call(prompt, tier=gemini.SMART, timeout_ms=30_000)
-        if response is None:
-            return "ERROR: every Gemini model on the ladder failed"
-        code = (response.text or "").strip()
-        if code.startswith("```"):
-            lines = code.split("\n")
-            code  = "\n".join(lines[1:-1]).strip()
-        return code
-    except Exception as e:
-        return f"ERROR: {e}"
+def _handle_natural_task(task: str, player=None) -> str:
+    """Classifies a natural language desktop request into a pre-defined safe action."""
+    task_lower = task.lower()
+    
+    if any(k in task_lower for k in ["wallpaper", "background"]):
+        return "Please provide an image path or URL to change the wallpaper."
+    elif any(k in task_lower for k in ["organize", "tidy", "sort"]):
+        mode = "by_date" if "date" in task_lower else "by_type"
+        return organize_desktop(mode=mode)
+    elif any(k in task_lower for k in ["clean", "archive"]):
+        return clean_desktop()
+    elif any(k in task_lower for k in ["list", "show", "files"]):
+        return list_desktop()
+    elif any(k in task_lower for k in ["stat", "space", "size"]):
+        return get_desktop_stats()
+        
+    return "Action not recognized or permitted as a direct safe desktop action."
 
 def set_wallpaper(image_path: str) -> str:
     path = Path(image_path).expanduser().resolve()
@@ -166,7 +64,8 @@ def set_wallpaper(image_path: str) -> str:
             if path.suffix.lower() in {".webp", ".png"}:
                 try:
                     from PIL import Image
-                    bmp_path = Path(tempfile.mktemp(suffix=".bmp"))
+                    with tempfile.NamedTemporaryFile(suffix=".bmp", delete=False) as _tmp_f:
+                        bmp_path = Path(_tmp_f.name)
                     Image.open(path).convert("RGB").save(bmp_path, "BMP")
                     path = bmp_path
                 except ImportError:
@@ -463,18 +362,11 @@ def desktop_control(
             actual_task = task or params.get("description", "")
             if not actual_task:
                 return "Please describe what you want to do on the desktop."
-
-            print(f"[Desktop] Asking Gemini: {actual_task}")
-            if player:
-                player.write_log("[Desktop] Generating action...")
-
-            code = _ask_gemini_for_desktop_action(actual_task)
-            return _execute_generated_code(code, player=player)
+            return _handle_natural_task(actual_task, player=player)
 
         else:
             if action:
-                code = _ask_gemini_for_desktop_action(action)
-                return _execute_generated_code(code, player=player)
+                return _handle_natural_task(action, player=player)
             return "No action or task specified."
 
     except Exception as e:

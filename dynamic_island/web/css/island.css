@@ -1,0 +1,623 @@
+/* 
+  island.css
+  Apple-Grade Dynamic Island Squircle Styling & Jet-Black Theme
+*/
+
+:root {
+  --island-black: #000000;
+  --island-border: rgba(255, 255, 255, 0.12);
+  --island-specular: rgba(255, 255, 255, 0.22);
+  --glass-obsidian: rgba(16, 16, 18, 0.88);
+  --glass-border: rgba(255, 255, 255, 0.08);
+  --text-main: #f5f5f7;
+  --text-muted: rgba(235, 235, 245, 0.6);
+  --accent-cyan: #38bdf8;
+  --accent-purple: #a855f7;
+  --accent-amber: #f59e0b;
+  --accent-green: #10b981;
+  --danger-red: #ef4444;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  background: transparent !important;
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, sans-serif;
+  color: var(--text-main);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Dynamic Island Outer Container */
+.island-stage {
+  position: relative;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 10px;
+  pointer-events: none;
+}
+
+/* The Core Dynamic Island Pill */
+.dynamic-island {
+  position: relative;
+  width: 190px;
+  height: 36px;
+  min-width: 190px;
+  min-height: 36px;
+  flex-shrink: 0;
+  background: var(--island-black);
+  border-radius: 22px;
+  box-shadow: 
+    0 12px 32px rgba(0, 0, 0, 0.6),
+    0 0 0 1px var(--island-border) inset,
+    0 0 24px rgba(0, 0, 0, 0.8);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 16px;
+  overflow: hidden;
+  pointer-events: auto;
+  cursor: pointer;
+  will-change: width, height, border-radius, transform;
+  transform-origin: top center;
+  z-index: 100;
+}
+
+/* Apple iPhone-style specular glass highlight on top rim */
+.dynamic-island::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 15%;
+  right: 15%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--island-specular), transparent);
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Lobes for balanced left/right layout */
+.island-lobe {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  z-index: 2;
+}
+
+.island-lobe.left {
+  justify-content: flex-start;
+}
+
+.island-lobe.right {
+  justify-content: flex-end;
+}
+
+.island-center {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  z-index: 2;
+}
+
+/* Ambient Status Dot */
+.ambient-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 10px var(--accent-cyan);
+  transition: all 0.3s ease;
+}
+
+.ambient-dot.listening {
+  background: var(--accent-amber);
+  box-shadow: 0 0 12px var(--accent-amber);
+  animation: pulseDot 1.2s infinite ease-in-out;
+}
+
+.ambient-dot.speaking {
+  background: var(--accent-purple);
+  box-shadow: 0 0 14px var(--accent-purple);
+  animation: pulseDot 0.8s infinite ease-in-out;
+}
+
+/* State Content Slots */
+.slot {
+  display: none;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: space-between;
+  opacity: 0;
+  transition: opacity 0.24s ease;
+}
+
+.slot.active {
+  display: flex;
+  opacity: 1;
+}
+
+/* Idle State Text */
+.idle-title {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  color: var(--text-main);
+}
+
+.idle-badge {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  color: var(--accent-cyan);
+}
+
+/* Listening Audio Waveform Canvas */
+.waveform-canvas {
+  width: 180px;
+  height: 32px;
+}
+
+/* Speaking Fluid Ribbon Canvas */
+.ribbon-canvas {
+  width: 220px;
+  height: 36px;
+}
+
+/* Expanded Sheet Container */
+.sheet-content {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 4px 10px;
+}
+
+.sheet-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 8px;
+}
+
+.sheet-title {
+  font-size: 14px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sheet-body {
+  max-height: 240px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+.sheet-input-bar {
+  display: flex;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  padding: 6px 12px;
+}
+
+.sheet-input {
+  flex: 1;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: #fff;
+  font-size: 13px;
+}
+
+/* Confirmation Action Buttons */
+.confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.pill-btn {
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pill-btn.approve {
+  background: var(--accent-green);
+  color: #fff;
+}
+
+.pill-btn.approve:hover {
+  filter: brightness(1.15);
+  transform: scale(1.04);
+}
+
+.pill-btn.deny {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pill-btn.deny:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* Laser Thinking Border Sweep */
+.laser-border {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: linear-gradient(90deg, var(--accent-cyan), var(--accent-purple), var(--accent-cyan));
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+.laser-border.active {
+  opacity: 1;
+  animation: laserSweep 2s linear infinite;
+}
+
+/* Jev-Ultrafast Telemetry Chip */
+.jev-telemetry-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--accent-cyan);
+  font-weight: 600;
+}
+
+/* Music Pill Toggle in Idle State */
+.music-pill-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.music-pill-toggle:hover {
+  background: rgba(16, 185, 129, 0.15);
+  border-color: rgba(16, 185, 129, 0.35);
+  color: var(--accent-green);
+  transform: scale(1.04);
+}
+
+.music-note-icon {
+  font-size: 11px;
+}
+
+/* Vinyl Disc Animation */
+.album-disc {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #222 30%, #111 60%, #333 100%);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.3);
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vinyl-center {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+}
+
+.spinning {
+  animation: spinVinyl 4s linear infinite;
+}
+
+.spinning.paused {
+  animation-play-state: paused;
+}
+
+@keyframes spinVinyl {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.music-compact-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.waveform-mini-canvas {
+  width: 68px;
+  height: 24px;
+}
+
+.mini-icon-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 6px;
+  transition: transform 0.15s ease;
+}
+
+.mini-icon-btn:hover {
+  transform: scale(1.15);
+}
+
+/* Expanded Music Player Card */
+.music-expanded-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.music-player-core {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 16px 12px;
+}
+
+.artwork-container {
+  position: relative;
+  width: 84px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.album-art-box {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, rgba(20, 30, 25, 0.95), rgba(10, 15, 12, 0.95));
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.7), 0 0 20px rgba(16, 185, 129, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
+.large-vinyl {
+  position: absolute;
+  right: -14px;
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: radial-gradient(circle, #2a2a2a 20%, #111 50%, #222 75%, #050505 100%);
+  border: 1.5px solid rgba(255, 255, 255, 0.15);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vinyl-label {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #10b981, #059669);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.vinyl-hole {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #000;
+}
+
+.track-meta {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 320px;
+}
+
+.track-title-large {
+  font-size: 15px;
+  font-weight: 700;
+  color: #fff;
+  letter-spacing: -0.2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.track-artist-sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Scrubber / Progress Bar */
+.scrubber-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.time-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 24px;
+}
+
+.progress-track {
+  flex: 1;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  overflow: hidden;
+  cursor: pointer;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-green), var(--accent-cyan));
+  border-radius: 3px;
+  transition: width 0.3s ease;
+}
+
+/* Media Controls Row */
+.media-controls-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+  margin-top: 8px;
+}
+
+.media-btn {
+  background: transparent;
+  border: none;
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+}
+
+.media-btn.primary {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5), 0 0 16px rgba(16, 185, 129, 0.25);
+  font-size: 18px;
+}
+
+.media-btn.primary:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: scale(1.08);
+}
+
+.media-btn.secondary {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  font-size: 14px;
+}
+
+.media-btn.secondary:hover {
+  background: rgba(255, 255, 255, 0.12);
+  transform: scale(1.06);
+}
+
+/* Volume Bar */
+.volume-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 6px;
+  padding: 0 16px;
+}
+
+.volume-btn {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+
+.volume-btn:hover {
+  transform: scale(1.15);
+}
+
+.volume-slider-track {
+  flex: 1;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.volume-slider-fill {
+  height: 100%;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 2px;
+}
+
+.view-switch-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.view-switch-btn:hover {
+  background: rgba(255, 255, 255, 0.16);
+  transform: scale(1.04);
+}

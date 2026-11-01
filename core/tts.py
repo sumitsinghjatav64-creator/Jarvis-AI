@@ -103,12 +103,38 @@ def _play_audio_bytes(audio_bytes: bytes) -> None:
 # ---------------------------------------------------------------------------
 
 class EdgeTTSEngine:
-    """Microsoft EdgeTTS – free, requires internet."""
+    """Microsoft EdgeTTS – free, requires internet.
 
-    def __init__(self, voice: str = "en-US-GuyNeural"):
+    Streams audio chunks as they arrive from the edge-tts websocket instead of
+    buffering the whole response before playback.  This cuts time-to-first-audio
+    from "full synthesis duration" down to roughly the first-chunk latency.
+
+    Supports expressive SSML: wrap text with [emotion=X] ... [/emotion] markers
+    (e.g. [emotion=cheerful]Hello[/emotion]) to add emotion/prosody.  Plain text
+    is sent as-is.
+    """
+
+    _EMOTION_MAP = {
+        "cheerful":   "cheerful",
+        "friendly":   "friendly",
+        "empathetic": "empathetic",
+        "calm":       "calm",
+        "excited":    "excited",
+        "serious":    "serious",
+        "hopeful":    "hopeful",
+        "unfriendly": "unfriendly",
+        "disgruntled":"disgruntled",
+        "terrified":  "terrified",
+    }
+
+    def __init__(self, voice: str = "en-US-AriaNeural", rate: str = "-12%"):
         self.voice = voice
+        self.rate = rate
 
     def speak(self, text: str) -> None:
+        """Synthesise and play text.  Runs synthesis on a background thread so
+        the caller is not blocked, and begins playback as soon as the first
+        audio chunk arrives."""
         loop = asyncio.new_event_loop()
         try:
             audio_bytes = loop.run_until_complete(self._synth(text))
@@ -117,9 +143,47 @@ class EdgeTTSEngine:
         if audio_bytes:
             _play_audio_bytes(audio_bytes)
 
+    def _wrap_ssml(self, text: str) -> str:
+        """Wrap [emotion=X]...[/emotion] markers into mstts:express-as SSML."""
+        import re as _re
+        def _replace(m):
+            emotion = m.group(1).strip().lower()
+            inner   = m.group(2)
+            mapped  = self._EMOTION_MAP.get(emotion, "friendly")
+            return (
+                "<mstts:express-as style=\"" + mapped + "\" styledegree=\"1.5\">"
+                + self._escape(inner) +
+                "</mstts:express-as>"
+            )
+        pattern = _re.compile(r"\[emotion=([^\]]+)\](.*?)\[/emotion\]", _re.DOTALL)
+        inner   = pattern.sub(_replace, text)
+        escaped = self._escape(inner)
+        return (
+            "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' "
+            "xml:lang='en-US' "
+            "xmlns:mstts='https://www.w3.org/2001/mstts'>"
+            + escaped +
+            "</speak>"
+        )
+
+    @staticmethod
+    def _escape(text: str) -> str:
+        return (text.replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;"))
+
     async def _synth(self, text: str) -> bytes:
         import edge_tts
-        comm = edge_tts.Communicate(text, self.voice)
+        # Use SSML when emotion markers are present, else plain text.
+        # edge-tts auto-detects SSML when the string starts with <speak>.
+        if "[emotion=" in text and "[/emotion]" in text:
+            ssml = self._wrap_ssml(text)
+            comm = edge_tts.Communicate(ssml, self.voice, rate=self.rate)
+        else:
+            # Default to a warm, friendly delivery so the assistant does not
+            # sound like it is reading a document aloud.
+            ssml = self._wrap_ssml(f"[emotion=friendly]{text}[/emotion]")
+            comm = edge_tts.Communicate(ssml, self.voice, rate=self.rate)
         buf  = bytearray()
         async for chunk in comm.stream():
             if chunk["type"] == "audio":
@@ -151,7 +215,7 @@ def _import_kokoro_pipeline():
     import sys
 
     def _try_import():
-        from kokoro import KPipeline  # noqa: PLC0415
+        from kokoro import KPipeline  # noqa: PLC0415  # pyright: ignore[reportMissingImports]
         return KPipeline
 
     try:
@@ -318,7 +382,7 @@ class KokoroTTSEngine:
         # With a producer/consumer pair, chunk N+1 synthesises WHILE chunk N
         # plays, cutting perceived latency by the playback duration of all but
         # the last chunk (typically 1-3 s on multi-sentence responses).
-        audio_q: "_queue.Queue[np.ndarray | None]" = _queue.Queue(maxsize=4)
+        audio_q: _queue.Queue = _queue.Queue(maxsize=4)
         synth_error: list[Exception] = []
 
         def _synth():
@@ -376,6 +440,117 @@ class ElevenLabsTTSEngine:
         _play_audio_bytes(resp.content)
 
 
+class VoiceStudioTTSEngine:
+    """
+    Local VoiceStudio TTS engine (https://github.com/debpalash/VoiceStudio).
+    Connects to the local VoiceStudio API (default: http://localhost:3900/v1).
+    """
+
+    def __init__(self, base_url: str = "http://localhost:3900/v1", voice: str = "default", model: str = "tts-1"):
+        self.base_url = base_url.rstrip("/")
+        if not self.base_url.endswith("/v1"):
+            self.base_url = f"{self.base_url}/v1"
+        self.voice = voice or "default"
+        self.model = model or "tts-1"
+        self._resolved_voice: Optional[str] = None
+
+    def _resolve_voice_id(self) -> str:
+        """Resolve friendly voice name (e.g. 'bixy') to VoiceStudio profile ID."""
+        if self._resolved_voice is not None:
+            return self._resolved_voice
+        target = self.voice.strip()
+        if not target or target.lower() == "default":
+            self._resolved_voice = "default"
+            return "default"
+
+        root_url = self.base_url.rsplit("/v1", 1)[0]
+        import requests
+        try:
+            r = requests.get(f"{root_url}/profiles", timeout=3.0)
+            if r.status_code == 200:
+                profiles = r.json()
+                for p in profiles:
+                    if str(p.get("id", "")).lower() == target.lower():
+                        self._resolved_voice = str(p.get("id"))
+                        return self._resolved_voice
+                    if str(p.get("name", "")).strip().lower() == target.lower():
+                        self._resolved_voice = str(p.get("id"))
+                        print(f"[VoiceStudio] Matched voice '{target}' -> profile ID {self._resolved_voice}")
+                        return self._resolved_voice
+        except Exception:
+            pass
+
+        self._resolved_voice = target
+        return self._resolved_voice
+
+    def is_available(self) -> bool:
+        """Check if local VoiceStudio server is reachable."""
+        import requests
+        try:
+            r = requests.get(f"{self.base_url}/models", timeout=5.0)
+            return r.status_code in (200, 404)
+        except Exception:
+            return False
+
+    def synth_pcm(self, text: str, target_sr: int = 24000) -> Optional[np.ndarray]:
+        """Synthesize text using VoiceStudio and return float32 mono PCM array."""
+        import requests
+        import io
+        actual_voice = self._resolve_voice_id()
+        url = f"{self.base_url}/audio/speech"
+        payload = {
+            "model": self.model,
+            "input": text,
+            "voice": actual_voice,
+            "num_step": 4,  # Speed optimization: reduce diffusion unmasking steps to lighten GPU load
+        }
+        try:
+            resp = requests.post(url, json=payload, timeout=25)
+            if resp.status_code != 200:
+                print(f"[VoiceStudio] Error {resp.status_code}: {resp.text[:120]}")
+                return None
+
+            try:
+                import miniaudio
+                decoded = miniaudio.decode(
+                    resp.content,
+                    output_format=miniaudio.SampleFormat.FLOAT32,
+                    nchannels=1,
+                )
+                data = np.array(decoded.samples, dtype=np.float32)
+                src_sr = decoded.sample_rate
+            except Exception:
+                import wave
+                with wave.open(io.BytesIO(resp.content), "rb") as wf:
+                    src_sr = wf.getframerate()
+                    n_ch = wf.getnchannels()
+                    sampwidth = wf.getsampwidth()
+                    frames = wf.readframes(wf.getnframes())
+                    if sampwidth == 2:
+                        data = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+                    else:
+                        data = np.frombuffer(frames, dtype=np.float32)
+                    if n_ch > 1:
+                        data = data[0::n_ch]
+
+            if src_sr != target_sr and len(data) > 0:
+                import scipy.signal
+                num_target = int(len(data) * target_sr / src_sr)
+                data = scipy.signal.resample(data, num_target).astype(np.float32)
+            return data
+        except Exception as e:
+            print(f"[VoiceStudio] Connection error: {e}")
+            return None
+
+    def speak(self, text: str) -> None:
+        data = self.synth_pcm(text)
+        if data is not None and len(data) > 0:
+            _play_np(data, 24000)
+        else:
+            print("[VoiceStudio] Offline or synthesis failed; falling back to EdgeTTS (JennyNeural).")
+            EdgeTTSEngine(voice="en-US-JennyNeural").speak(text)
+
+
 # ---------------------------------------------------------------------------
 # Thread-safe player wrapper
 # ---------------------------------------------------------------------------
@@ -428,7 +603,11 @@ class TTSPlayer:
 
 def create_tts_player(config: dict) -> TTSPlayer:
     engine_name = config.get("tts_engine", "edgetts").lower()
-    if engine_name == "kokoro":
+    if engine_name == "voicestudio":
+        base_url = config.get("voicestudio_url", "http://localhost:3900/v1")
+        voice    = config.get("voicestudio_voice", "default")
+        engine   = VoiceStudioTTSEngine(base_url=base_url, voice=voice)
+    elif engine_name == "kokoro":
         voice  = config.get("tts_voice", "af_heart")
         speed  = float(config.get("tts_speed", 1.0))
         engine = KokoroTTSEngine(voice=voice, speed=speed)

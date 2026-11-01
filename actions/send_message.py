@@ -141,6 +141,16 @@ def _desktop_send(app_name: str, receiver: str, message: str) -> str:
 
     time.sleep(1.0)
     _search_in_app(receiver)
+    time.sleep(1.5)  # Search results load hone ka wait karein
+
+    # WhatsApp ke naye 'Favorites / Unread' filters ko bypass karne ke liye:
+    if app_name.lower() in ["whatsapp", "whatsapp web"]:
+        import pyautogui
+        pyautogui.press("down")
+        time.sleep(0.2)
+        pyautogui.press("down")
+        time.sleep(0.2)
+
     pyautogui.press("enter")
     time.sleep(0.8)
 
@@ -151,48 +161,20 @@ def _desktop_send(app_name: str, receiver: str, message: str) -> str:
     return f"Message sent to {receiver} via {app_name}."
 
 def _send_whatsapp(receiver: str, message: str) -> str:
-    """Send via a driver that verifies the selected conversation and outcome.
-
-    Never fall back to blind Ctrl+F typing: that searches message history in
-    WhatsApp, not reliably for a contact, and can type into the wrong place.
-    """
-    try:
-        from plugins import _whatsapp_core as wa
-    except ImportError:
-        wa = None
-
-    if wa is not None:
-        try:
-            transport, why = wa.get()
-        except Exception as exc:
-            return ("Could not start the verified WhatsApp driver: "
-                    f"{str(exc)[:300]}. Nothing was sent.")
-        if transport is not None:
-            try:
-                sent, failure = transport.send_message_to(receiver, message)
-            except Exception as exc:
-                return ("WhatsApp delivery could not be determined because the driver failed: "
-                        f"{str(exc)[:300]}. Check the chat before retrying to avoid a duplicate.")
-            if sent:
-                return f"Message sent to {receiver} via WhatsApp."
-            return (f"The message to {receiver} was NOT sent on WhatsApp: {failure}. "
-                    "Tell the user plainly that it was not sent, and why; do not say it was sent.")
-        print(f"[SendMessage] Verified WhatsApp transport unavailable: {why}")
+    """Send only through the verified UIA path; fail closed if the recipient is uncertain."""
+    from actions._whatsapp_driver import send_message_to_contact
 
     try:
-        from actions._whatsapp_driver import send_message_to_contact
         status, detail = send_message_to_contact(receiver, message)
     except Exception as exc:
-        return ("Could not use the verified WhatsApp Desktop driver: "
-                f"{str(exc)[:300]}. Nothing was sent.")
+        return f"NOT sent to {receiver} via WhatsApp: verified driver failed ({exc})."
 
     if status == "sent":
         return f"Message sent to {receiver} via WhatsApp."
     if status == "unknown":
-        return (f"WhatsApp could not confirm whether the message to {receiver} was sent: {detail}. "
-                "Check that chat before retrying to avoid sending a duplicate.")
-    return (f"The message to {receiver} was NOT sent on WhatsApp: {detail}. "
-            "Tell the user plainly that it was not sent, and why; do not say it was sent.")
+        return f"Delivery status unknown for {receiver} via WhatsApp: {detail} Check the chat before retrying."
+    return f"NOT sent to {receiver} via WhatsApp: {detail}"
+
 
 def _send_telegram(receiver: str, message: str) -> str:
     return _desktop_send("Telegram", receiver, message)

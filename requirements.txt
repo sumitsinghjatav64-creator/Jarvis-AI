@@ -112,3 +112,11 @@ pynvml                       # system_monitor + the HUD's GPU meter (NVIDIA)
 # macOS / Linux OS actions (volume, brightness, reminders) shell out to native
 # tools (pactl / brightnessctl / osascript / systemd), so no extra Python
 # packages are needed there — nothing Windows-specific is ever pulled in.
+# --- Under Automation / input control ---
+pyautogui>=0.9.54,<1
+pyperclip>=1.8.2,<2
+
+# --- Under Documents, media & hardware readouts ---
+pydub>=0.25.1,<1
+pandas>=2.0,<3
+speakeronnx>=0.0.1

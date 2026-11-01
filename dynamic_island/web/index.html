@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dynamic Island HUD</title>
+  <link rel="stylesheet" href="css/island.css" />
+  <link rel="stylesheet" href="css/animations.css" />
+</head>
+<body>
+  <div class="island-stage">
+    <!-- The Core Dynamic Island Pill -->
+    <div id="dynamic-island" class="dynamic-island">
+      <!-- Laser Thinking Glow Border -->
+      <div class="laser-border"></div>
+
+      <!-- Slot 1: Idle Ambient Pill -->
+      <div id="slot-idle" class="slot active">
+        <div class="island-lobe left">
+          <div class="ambient-dot"></div>
+          <span class="idle-title">Bixy</span>
+        </div>
+        <div class="island-lobe right">
+          <button class="music-pill-toggle" onclick="event.stopPropagation(); window.toggleMusicView();" title="Open Music Player">
+            <span class="music-note-icon">🎵</span>
+            <span>Music</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Slot 2: Music Compact Pill (Now Playing) -->
+      <div id="slot-music" class="slot">
+        <div class="island-lobe left">
+          <div id="mini-vinyl" class="album-disc spinning">
+            <div class="vinyl-center"></div>
+          </div>
+          <span id="mini-track-title" class="music-compact-title">Now Playing</span>
+        </div>
+        <div class="island-center">
+          <canvas id="canvas-music-mini" class="waveform-mini-canvas" width="68" height="24"></canvas>
+        </div>
+        <div class="island-lobe right">
+          <button id="mini-play-btn" class="mini-icon-btn" onclick="event.stopPropagation(); window.triggerMedia('play_pause');" title="Play/Pause">
+            <span id="mini-play-icon">⏸️</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Slot 3: Listening (Real-Time Audio Equalizer) -->
+      <div id="slot-listening" class="slot">
+        <div class="island-lobe left">
+          <div class="ambient-dot listening"></div>
+          <span style="font-size: 11px; font-weight: 700; color: var(--accent-amber);">MIC</span>
+        </div>
+        <div class="island-center">
+          <canvas id="canvas-listening" class="waveform-canvas" width="180" height="32"></canvas>
+        </div>
+        <div class="island-lobe right">
+          <span style="font-size: 11px; color: var(--text-muted);">Listening...</span>
+        </div>
+      </div>
+
+      <!-- Slot 4: Thinking (Jev System 1) -->
+      <div id="slot-thinking" class="slot">
+        <div class="island-lobe left">
+          <span style="font-size: 14px;">⚡</span>
+        </div>
+        <div class="island-center">
+          <span style="font-size: 12px; font-weight: 600; color: var(--accent-cyan);">Jev System 1 Routing...</span>
+        </div>
+        <div class="island-lobe right">
+          <span style="font-size: 10px; color: var(--accent-purple);">~45ms</span>
+        </div>
+      </div>
+
+      <!-- Slot 5: Speaking (Siri Fluid Wave Ribbon) -->
+      <div id="slot-speaking" class="slot">
+        <div class="island-lobe left">
+          <div class="ambient-dot speaking"></div>
+          <span style="font-size: 11px; font-weight: 700; color: var(--accent-purple);">BIXY</span>
+        </div>
+        <div class="island-center">
+          <canvas id="canvas-speaking" class="ribbon-canvas" width="220" height="36"></canvas>
+        </div>
+        <div class="island-lobe right">
+          <span id="speaking-text" style="font-size: 11px; color: var(--text-muted); max-width: 60px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Speaking</span>
+        </div>
+      </div>
+
+      <!-- Slot 6: Working (Jev-Ultrafast Web Automation Telemetry) -->
+      <div id="slot-working" class="slot">
+        <div class="island-center">
+          <div class="jev-telemetry-chip">
+            <span style="font-size: 14px;">⚡</span>
+            <span id="working-step-label">Jev-Ultrafast Action...</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slot 7: Confirmation Safety Gate -->
+      <div id="slot-confirm" class="slot" style="flex-direction: column; justify-content: center; gap: 8px;">
+        <span id="confirm-title" style="font-size: 12px; font-weight: 600; color: #fff;">Confirm Action?</span>
+        <div class="confirm-actions">
+          <button class="pill-btn approve" onclick="window.sendConfirmation(true)">Approve</button>
+          <button class="pill-btn deny" onclick="window.sendConfirmation(false)">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Slot 8: Expanded Assistant Sheet -->
+      <div id="slot-expanded" class="slot" style="align-items: stretch;">
+        <div class="sheet-content">
+          <div class="sheet-header">
+            <div class="sheet-title">
+              <div class="ambient-dot"></div>
+              <span>Bixy Personal AI</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="view-switch-btn" onclick="event.stopPropagation(); window.toggleMusicView();" title="Switch to Music Player">
+                <span>🎵 Music</span>
+              </button>
+              <span style="font-size: 11px; color: var(--text-muted);">Esc to close</span>
+            </div>
+          </div>
+          <div id="sheet-body" class="sheet-body">
+            Welcome to your <strong>Dynamic Island HUD</strong>.<br><br>
+            • <strong>Jev (System 1)</strong>: Evaluates queries in sub-150ms.<br>
+            • <strong>Universal Music</strong>: Controls Spotify, YouTube, Apple Music, and Windows media.<br>
+            • <strong>Collision Guard</strong>: Retracts when assistant is focused, drops down when minimized.<br>
+            • <strong>Press Alt+Space</strong> to expand or collapse anytime.
+          </div>
+          <div class="sheet-input-bar">
+            <input type="text" id="sheet-input" class="sheet-input" placeholder="Ask Bixy anything or type a command..." onkeydown="if(event.key==='Enter') window.submitQuery()" />
+            <button class="pill-btn approve" style="padding: 4px 12px;" onclick="window.submitQuery()">Run</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Slot 9: Expanded Music Player Sheet -->
+      <div id="slot-music-expanded" class="slot" style="align-items: stretch;">
+        <div class="sheet-content music-expanded-content">
+          <div class="sheet-header">
+            <div class="sheet-title">
+              <span class="music-glow-note">🎵</span>
+              <span id="expanded-source-badge" class="idle-badge" style="background: rgba(16, 185, 129, 0.15); color: #10b981;">Now Playing</span>
+            </div>
+            <div style="display: flex; gap: 8px; align-items: center;">
+              <button class="view-switch-btn" onclick="event.stopPropagation(); window.toggleAssistantView();" title="Switch to Assistant Chat">
+                <span>💬 Assistant</span>
+              </button>
+              <span style="font-size: 11px; color: var(--text-muted);">Esc to close</span>
+            </div>
+          </div>
+
+          <!-- Music Player Card Core -->
+          <div class="music-player-core">
+            <div class="artwork-container">
+              <div id="large-vinyl" class="large-vinyl spinning">
+                <div class="vinyl-groove"></div>
+                <div class="vinyl-label">
+                  <div class="vinyl-hole"></div>
+                </div>
+              </div>
+              <div class="album-art-box">
+                <span style="font-size: 32px;">🎧</span>
+              </div>
+            </div>
+
+            <div class="track-meta">
+              <div id="expanded-track-title" class="track-title-large">Starboy</div>
+              <div id="expanded-artist-name" class="track-artist-sub">The Weeknd • Spotify</div>
+            </div>
+
+            <!-- Scrubber / Progress Bar -->
+            <div class="scrubber-row">
+              <span id="time-elapsed" class="time-label">1:15</span>
+              <div class="progress-track">
+                <div id="progress-fill" class="progress-fill" style="width: 35%;"></div>
+              </div>
+              <span id="time-total" class="time-label">3:50</span>
+            </div>
+
+            <!-- Media Control Buttons -->
+            <div class="media-controls-row">
+              <button class="media-btn secondary" onclick="event.stopPropagation(); window.triggerMedia('prev');" title="Previous Track">
+                <span>⏮️</span>
+              </button>
+
+              <button class="media-btn primary" onclick="event.stopPropagation(); window.triggerMedia('play_pause');" title="Play / Pause">
+                <span id="expanded-play-icon">⏸️</span>
+              </button>
+
+              <button class="media-btn secondary" onclick="event.stopPropagation(); window.triggerMedia('next');" title="Next Track">
+                <span>⏭️</span>
+              </button>
+            </div>
+
+            <!-- Volume Control Bar -->
+            <div class="volume-row">
+              <button class="volume-btn" onclick="event.stopPropagation(); window.triggerMedia('vol_down');" title="Volume Down">
+                <span>🔉</span>
+              </button>
+              <div class="volume-slider-track">
+                <div class="volume-slider-fill" style="width: 65%;"></div>
+              </div>
+              <button class="volume-btn" onclick="event.stopPropagation(); window.triggerMedia('vol_up');" title="Volume Up">
+                <span>🔊</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <script src="js/bundle.js"></script>
+</body>
+</html>
